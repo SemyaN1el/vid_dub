@@ -1,0 +1,4 @@
+original_tts_model/
+**/final.ipynb
+data/
+config.py
