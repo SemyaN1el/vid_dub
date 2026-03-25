@@ -147,8 +147,7 @@ def step_translate(paths: dict, suffix: str) -> None:
         torch_dtype=torch.float16 if cfg.DEVICE == "cuda" else torch.float32,
         device_map="auto" if cfg.DEVICE == "cuda" else None
     )
-    if cfg.DEVICE == "cuda":
-        model_mt = model_mt.to("cuda")
+    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
     model_mt.eval()
 
     translated = translate_segments_with_context(

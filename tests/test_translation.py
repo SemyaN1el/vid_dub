@@ -48,8 +48,7 @@ def load_model(device: str):
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         device_map="auto" if device == "cuda" else None
     )
-    if device == "cuda":
-        model = model.to("cuda")
+    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
     model.eval()
     logger.info("Модель загружена.")
     return model, tokenizer

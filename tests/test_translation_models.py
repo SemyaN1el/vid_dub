@@ -1,15 +1,16 @@
 """
-Сравнение моделей перевода (per-segment стратегия):
-    - facebook/nllb-200-distilled-600M  (~2.4 GB)
-    - facebook/nllb-200-distilled-1.3B  (~5.4 GB)
+Сравнение моделей и стратегий перевода:
+    nllb-600M  × {per-segment, sentence-level}
+    nllb-1.3B  × {per-segment, sentence-level}
 
 Запуск:
     python tests/test_translation_models.py
     python tests/test_translation_models.py --segments path/to/segments.json
-    python tests/test_translation_models.py --suffix woman
+    python tests/test_translation_models.py --pause 0.5
 
 Результаты сохраняются в ./data/test/
 """
+
 import argparse
 import gc
 import json
@@ -25,13 +26,14 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
-from src.translation import translate_segments
+from src.translation import translate_segments, translate_segments_as_sentences
 from utils.helpers import manage_directory
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - [%(levelname)s] - %(message)s"
 )
+
 logger = logging.getLogger(__name__)
 
 MODELS = {
@@ -42,26 +44,24 @@ MODELS = {
 
 def load_model(model_name: str, device: str):
     from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-    logger.info(f"Загрузка модели: {model_name}")
+    logger.info(f"Загрузка: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         device_map="auto" if device == "cuda" else None
     )
-    if device == "cuda":
-        model = model.to("cuda")
+    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
     model.eval()
-    logger.info(f"Модель загружена: {model_name}")
     return model, tokenizer
 
 
-def compute_labse(original_segments, translated_segments) -> dict:
+def compute_labse(translated_segments) -> dict:
     from sentence_transformers import SentenceTransformer
     from sklearn.metrics.pairwise import cosine_similarity
 
     labse = SentenceTransformer("LaBSE")
-    orig_texts  = [s["text"].strip() for s in original_segments  if s.get("text")]
+    orig_texts  = [s.get("original_text", s["text"]).strip() for s in translated_segments if s.get("text")]
     trans_texts = [s["text"].strip() for s in translated_segments if s.get("text")]
     min_len     = min(len(orig_texts), len(trans_texts))
 
@@ -73,77 +73,94 @@ def compute_labse(original_segments, translated_segments) -> dict:
         "mean":        float(sims.mean()),
         "min":         float(sims.min()),
         "max":         float(sims.max()),
-        "per_segment": sims.tolist()
+        "per_segment": sims.tolist(),
+        "n":           len(sims)
     }
 
 
 def print_comparison(results: dict) -> None:
-    print("\n" + "=" * 68)
-    print("  СРАВНЕНИЕ МОДЕЛЕЙ ПЕРЕВОДА (LaBSE, per-segment)")
-    print("=" * 68)
+    names = list(results.keys())
+    print("\n" + "=" * 80)
+    print("  МОДЕЛЬ × СТРАТЕГИЯ (LaBSE)")
+    print("=" * 80)
     print(f"{'Метрика':<20}", end="")
-    for name in results:
-        print(f"{name:>20}", end="")
+    for name in names:
+        print(f"{name:>15}", end="")
     print()
-    print("-" * 68)
+    print("-" * 80)
 
-    for key in ("mean", "min", "max"):
-        print(f"{key.capitalize():<20}", end="")
+    for key, label in [("mean", "Mean"), ("min", "Min"), ("max", "Max")]:
+        print(f"{label:<20}", end="")
         for data in results.values():
-            print(f"{data['labse'][key]:>20.4f}", end="")
+            print(f"{data['labse'][key]:>15.4f}", end="")
         print()
 
-    print("-" * 68)
-    print(f"{'Время (сек)':<20}", end="")
+    print("-" * 80)
+    print(f"{'Сегментов':<20}", end="")
     for data in results.values():
-        print(f"{data['time']:>20.1f}", end="")
+        print(f"{data['labse']['n']:>15}", end="")
     print()
 
-    print("=" * 68)
-    best = max(results.items(), key=lambda x: x[1]["labse"]["mean"])
-    print(f"  Лучшая модель: {best[0]} (LaBSE mean: {best[1]['labse']['mean']:.4f})")
-    print("=" * 68)
+    print(f"{'Время (сек)':<20}", end="")
+    for data in results.values():
+        print(f"{data['time']:>15.1f}", end="")
+    print()
+
+    print("=" * 80)
+    best_name, best_data = max(results.items(), key=lambda x: x[1]["labse"]["mean"])
+    print(f"  Победитель: {best_name}  (LaBSE mean: {best_data['labse']['mean']:.4f})")
+    print("=" * 80)
 
 
 def plot_comparison(results: dict, save_path: str = None) -> None:
-    colors = ["steelblue", "darkorange"]
+    # Цвета: per-segment синий/оранжевый, sentence-level зелёный/красный
+    color_map = {
+        "nllb-600M × per-segment":      "steelblue",
+        "nllb-600M × sentence-level":   "deepskyblue",
+        "nllb-1.3B × per-segment":      "darkorange",
+        "nllb-1.3B × sentence-level":   "green",
+    }
+    style_map = {
+        "per-segment":    "-",
+        "sentence-level": "--",
+    }
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=False)
+
+    # Верхний — все 4 кривые
+    ax = axes[0]
+    for name, data in results.items():
+        sims   = data["labse"]["per_segment"]
+        x      = list(range(len(sims)))
+        color  = color_map.get(name, "gray")
+        style  = "--" if "sentence" in name else "-"
+        ax.plot(x, sims, marker="o", markersize=2, linestyle=style,
+                label=f"{name}  (mean={data['labse']['mean']:.4f}, N={data['labse']['n']}, {data['time']:.0f}с)",
+                color=color, alpha=0.85)
+        ax.axhline(data["labse"]["mean"], color=color, linestyle=":", alpha=0.4)
+
+    ax.set_title("Сравнение моделей и стратегий перевода — LaBSE")
+    ax.set_ylabel("Косинусное сходство")
+    ax.set_ylim(0.4, 1.0)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # Нижний — bar chart средних значений
+    ax2 = axes[1]
     names  = list(results.keys())
-    n      = min(len(v["labse"]["per_segment"]) for v in results.values())
-    x      = list(range(n))
+    means  = [results[n]["labse"]["mean"] for n in names]
+    colors = [color_map.get(n, "gray") for n in names]
+    bars   = ax2.bar(names, means, color=colors, alpha=0.8, edgecolor="black", linewidth=0.5)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
+    for bar, val in zip(bars, means):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
+                 f"{val:.4f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-    # Верхний — LaBSE по сегментам
-    for i, (name, data) in enumerate(results.items()):
-        sims = data["labse"]["per_segment"][:n]
-        ax1.plot(x, sims, marker="o", markersize=2,
-                 label=f"{name} (среднее: {data['labse']['mean']:.4f}, время: {data['time']:.0f}с)",
-                 color=colors[i % len(colors)], alpha=0.8)
-        ax1.axhline(data["labse"]["mean"], color=colors[i % len(colors)],
-                    linestyle="--", alpha=0.4)
-
-    ax1.set_title("Сравнение моделей перевода — LaBSE по сегментам")
-    ax1.set_ylabel("Косинусное сходство")
-    ax1.set_ylim(0, 1)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # Нижний — разница (1.3B - 600M)
-    keys = list(results.keys())
-    if len(keys) == 2:
-        sims_a = results[keys[0]]["labse"]["per_segment"][:n]
-        sims_b = results[keys[1]]["labse"]["per_segment"][:n]
-        diff   = [sims_b[i] - sims_a[i] for i in range(n)]
-        colors_bar = ["green" if d >= 0 else "red" for d in diff]
-        ax2.bar(x, diff, color=colors_bar, alpha=0.7)
-        ax2.axhline(0, color="black", linewidth=0.8)
-        ax2.axhline(float(np.mean(diff)), color="purple", linestyle="--",
-                    label=f"Средняя разница: {np.mean(diff):+.4f}")
-        ax2.set_title(f"Разница ({keys[1]} − {keys[0]}): зелёный = 1.3B лучше")
-        ax2.set_xlabel("Сегмент")
-        ax2.set_ylabel("Δ LaBSE")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+    ax2.set_title("Среднее LaBSE по методам")
+    ax2.set_ylabel("LaBSE mean")
+    ax2.set_ylim(min(means) - 0.02, max(means) + 0.02)
+    ax2.tick_params(axis="x", rotation=15)
+    ax2.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
     if save_path:
@@ -152,7 +169,7 @@ def plot_comparison(results: dict, save_path: str = None) -> None:
     plt.show()
 
 
-def run_test(segments_path: str, suffix: str) -> None:
+def run_test(segments_path: str, suffix: str, max_pause: float) -> None:
     out_dir = "./data/test"
     manage_directory(out_dir, action="create")
 
@@ -166,82 +183,79 @@ def run_test(segments_path: str, suffix: str) -> None:
 
     all_results = {}
 
-    for label, model_name in MODELS.items():
-        logger.info(f"\n{'='*50}")
-        logger.info(f"▶ Тестируем: {label} ({model_name})")
-        logger.info(f"{'='*50}")
+    for model_label, model_name in MODELS.items():
+        logger.info(f"\n{'='*60}")
+        logger.info(f"▶ Модель: {model_label} ({model_name})")
+        logger.info(f"{'='*60}")
 
-        # Загружаем модель
         model, tokenizer = load_model(model_name, cfg.DEVICE)
 
-        # Переводим и замеряем время
-        t_start = time.time()
-        translated = translate_segments(
-            model=model,
-            tokenizer=tokenizer,
-            segments=segments,
-            src_lang=cfg.MT_SRC_LANG,
-            tgt_lang=cfg.MT_TGT_LANG,
-            batch_size=cfg.MT_BATCH_SIZE,
-            max_length=cfg.MT_MAX_LENGTH
+        # Per-segment
+        logger.info(f"  Стратегия: per-segment")
+        t0 = time.time()
+        t_ps = translate_segments(
+            model=model, tokenizer=tokenizer, segments=segments,
+            src_lang=cfg.MT_SRC_LANG, tgt_lang=cfg.MT_TGT_LANG,
+            batch_size=cfg.MT_BATCH_SIZE, max_length=cfg.MT_MAX_LENGTH
         )
-        elapsed = time.time() - t_start
-        logger.info(f"Время перевода: {elapsed:.1f} сек")
+        elapsed_ps = time.time() - t0
+        path = os.path.join(out_dir, f"translated_{model_label}_per_segment_{suffix}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(t_ps, f, ensure_ascii=False, indent=2)
+        logger.info(f"  Сохранено: {path} ({elapsed_ps:.1f}с)")
 
-        # Сохраняем перевод
-        out_path = os.path.join(out_dir, f"translated_{label}_{suffix}.json")
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(translated, f, ensure_ascii=False, indent=2)
-        logger.info(f"Сохранено: {out_path}")
+        # Sentence-level
+        logger.info(f"  Стратегия: sentence-level (pause={max_pause}с)")
+        t0 = time.time()
+        t_sent = translate_segments_as_sentences(
+            model=model, tokenizer=tokenizer, segments=segments,
+            src_lang=cfg.MT_SRC_LANG, tgt_lang=cfg.MT_TGT_LANG,
+            max_pause_merge=max_pause,
+            batch_size=cfg.MT_BATCH_SIZE, max_length=cfg.MT_MAX_LENGTH
+        )
+        elapsed_sent = time.time() - t0
+        path = os.path.join(out_dir, f"translated_{model_label}_sentence_level_{suffix}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(t_sent, f, ensure_ascii=False, indent=2)
+        logger.info(f"  Сохранено: {path} ({elapsed_sent:.1f}с)")
 
         # Выгружаем модель
         del model, tokenizer
         gc.collect(); torch.cuda.empty_cache()
 
         # LaBSE
-        logger.info(f"Считаем LaBSE для {label}...")
-        labse = compute_labse(segments, translated)
-        logger.info(f"LaBSE mean: {labse['mean']:.4f}")
+        logger.info("  Считаем LaBSE...")
+        key_ps   = f"{model_label} × per-segment"
+        key_sent = f"{model_label} × sentence-level"
+        all_results[key_ps]   = {"labse": compute_labse(t_ps),   "time": elapsed_ps}
+        all_results[key_sent] = {"labse": compute_labse(t_sent), "time": elapsed_sent}
 
-        all_results[label] = {
-            "labse": labse,
-            "time":  elapsed
-        }
+        logger.info(f"  per-segment:    {all_results[key_ps]['labse']['mean']:.4f}")
+        logger.info(f"  sentence-level: {all_results[key_sent]['labse']['mean']:.4f}")
 
-    # Сохраняем сводные результаты
-    results_path = os.path.join(out_dir, f"models_comparison_{suffix}.json")
+    # Сохраняем сводку
+    summary = {k: {"labse": v["labse"], "time": v["time"]} for k, v in all_results.items()}
+    results_path = os.path.join(out_dir, f"models_strategies_comparison_{suffix}.json")
     with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=2)
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
     # Вывод
     print_comparison(all_results)
 
-    plot_path = os.path.join(out_dir, f"models_comparison_{suffix}.png")
+    plot_path = os.path.join(out_dir, f"models_strategies_comparison_{suffix}.png")
     plot_comparison(all_results, save_path=plot_path)
-
-    # Примеры
-    translations_by_label = {}
-    for label in MODELS:
-        out_path = os.path.join(out_dir, f"translated_{label}_{suffix}.json")
-        with open(out_path, "r", encoding="utf-8") as f:
-            translations_by_label[label] = json.load(f)
-
-    print("\n── Примеры (первые 5 сегментов) ──")
-    for i in range(min(5, len(segments))):
-        print(f"\n[{i}] Оригинал: {segments[i]['text']}")
-        for label, translated in translations_by_label.items():
-            text = translated[i]["text"] if i < len(translated) else "—"
-            print(f"    {label:<15} {text}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Сравнение моделей перевода")
+    parser = argparse.ArgumentParser(description="Сравнение моделей и стратегий перевода")
     parser.add_argument("--suffix",   default=cfg.SUFFIX)
     parser.add_argument("--segments", default=None)
+    parser.add_argument("--pause",    type=float, default=0.5,
+                        help="Макс. пауза для склейки sentence-level (по умолчанию: 0.5)")
     args = parser.parse_args()
 
     segments_path = args.segments or os.path.join(
         cfg.OUTPUT_PATH, f"segments_{args.suffix}.json"
     )
 
-    run_test(segments_path=segments_path, suffix=args.suffix)
+    run_test(segments_path=segments_path, suffix=args.suffix, max_pause=args.pause)
