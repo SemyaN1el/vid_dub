@@ -4,11 +4,15 @@
 Запуск:
     python main.py --step all                        # весь пайплайн
     python main.py --step preprocess                 # один шаг
-    python main.py --step asr --suffix woman         # другой спикер
+    python main.py --video ./data/input/talk.mp4     # явное видео без suffix
+    python main.py --video ./clips/ted.mp4 --job-name ted_ru
+    python main.py --step asr --suffix woman         # legacy-режим
     python main.py --step translate --test           # тестовый режим
+    python main.py --step translate --mt-model gemini-2.5-flash --mt-strategy per-segment
     python main.py --step all --suffix woman --test  # всё вместе
 
-Доступные шаги: preprocess, asr, translate, tts, postprocess, metrics, all
+Доступные шаги: preprocess, asr, translate, tts, postprocess, metrics,
+                 prepare_finetune, all
 """
 
 import argparse
@@ -17,11 +21,16 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 import config as cfg
 from utils.helpers import seed_everything, manage_directory
+from utils.pipeline_io import build_pipeline_paths, derive_job_name, resolve_input_video
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,39 +39,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ─── Пути ────────────────────────────────────────────────────────────────────
-
-def build_paths(suffix: str, test: bool = False) -> dict:
-    """
-    Формирует все пути пайплайна.
-    test=True  → ./data/test/   (изолированная директория для тестов)
-    test=False → ./data/output/ (production)
-    """
-    base_out = "./data/test" if test else cfg.OUTPUT_PATH
-    base_in  = cfg.INPUT_PATH
-    temp     = os.path.join(base_out, "temp")
-
-    return {
-        "input":               base_in,
-        "output":              base_out,
-        "temp":                temp,
-        "original_video":      os.path.join(base_in,  f"video_{suffix}.mp4"),
-        "original_audio":      os.path.join(temp,     f"original_extracted_audio_{suffix}.wav"),
-        "speaker_ref":         os.path.join(temp,     f"speaker_ref_{suffix}.wav"),
-        "vocals":              os.path.join(temp,     f"vocals_{suffix}.wav"),
-        "vocals_processed":    os.path.join(temp,     f"vocals_processed_{suffix}.wav"),
-        "background":          os.path.join(temp,     f"background_{suffix}.wav"),
-        "final_voice":         os.path.join(base_out, f"final_dubbing_{suffix}.wav"),
-        "final_mix":           os.path.join(base_out, f"final_mix_{suffix}.wav"),
-        "final_video":         os.path.join(base_out, f"final_video_{suffix}.mp4"),
-        "segments":            os.path.join(base_out, f"segments_{suffix}.json"),
-        "translated_segments": os.path.join(base_out, f"translated_segments_{suffix}.json"),
-        "audio_segments_dir":  os.path.join(temp,     "audio_segments"),
-    }
+def clear_torch_cache() -> None:
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def ensure_dirs(paths: dict) -> None:
-    for key in ("input", "output", "temp", "audio_segments_dir"):
+    for key in ("output", "temp", "audio_segments_dir", "speaker_refs_dir"):
         manage_directory(paths[key], action="create")
 
 
@@ -119,7 +102,19 @@ def step_asr(paths: dict, suffix: str) -> None:
         audio_path=paths["vocals_processed"],
         max_pause_between_sentences=cfg.MAX_PAUSE_BETWEEN_SENTENCES,
         max_audio_length_for_ref=cfg.MAX_AUDIO_LENGTH_FOR_REF,
-        output_ref_path=paths["speaker_ref"]
+        output_ref_path=paths["speaker_ref"],
+        default_speaker_id=cfg.DEFAULT_SPEAKER_ID,
+        reference_audio_path=paths["vocals"],
+        output_refs_dir=paths["speaker_refs_dir"],
+        output_profile_path=paths["speaker_profile"],
+        max_reference_clips=cfg.SPEAKER_PROFILE_CLIPS,
+        max_routing_clips=cfg.SPEAKER_ROUTING_POOL_CLIPS,
+        min_reference_sec=cfg.SPEAKER_PROFILE_MIN_SEC,
+        max_reference_sec=cfg.SPEAKER_PROFILE_MAX_SEC,
+        target_reference_sec=cfg.SPEAKER_PROFILE_TARGET_SEC,
+        min_reference_text_chars=cfg.SPEAKER_PROFILE_MIN_TEXT_CHARS,
+        reference_padding_ms=cfg.SPEAKER_PROFILE_PADDING_MS,
+        min_reference_gap_sec=cfg.SPEAKER_PROFILE_MIN_GAP_SEC
     )
 
     with open(paths["segments"], "w", encoding="utf-8") as f:
@@ -127,13 +122,20 @@ def step_asr(paths: dict, suffix: str) -> None:
     logger.info(f"Сегменты сохранены ({len(segments)} шт.): {paths['segments']}")
 
     del model_asr
-    gc.collect(); torch.cuda.empty_cache()
+    gc.collect(); clear_torch_cache()
     logger.info("╚══ ASR завершён ══╝")
 
 
 def step_translate(paths: dict, suffix: str) -> None:
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-    from src.translation import translate_segments_with_context
+    from src.translation import (
+        load_translation_model,
+        split_segments_for_translation,
+        normalize_translated_segments,
+        translate_segments,
+        translate_segments_as_sentences,
+        translate_segments_sliding_window,
+        translate_segments_with_context,
+    )
 
     logger.info("╔══ ШАГ 3: ПЕРЕВОД ══╗")
     check_file(paths["segments"], "translate")
@@ -141,38 +143,68 @@ def step_translate(paths: dict, suffix: str) -> None:
     with open(paths["segments"], "r", encoding="utf-8") as f:
         segments = json.load(f)
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.MT_MODEL_NAME)
-    model_mt  = AutoModelForSeq2SeqLM.from_pretrained(
-        cfg.MT_MODEL_NAME,
-        torch_dtype=torch.float16 if cfg.DEVICE == "cuda" else torch.float32,
-        device_map="auto" if cfg.DEVICE == "cuda" else None
+    prepared_segments = split_segments_for_translation(
+        segments,
+        cfg.MT_MAX_SEGMENT_CHARS
     )
-    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
-    model_mt.eval()
+    if len(prepared_segments) != len(segments):
+        logger.info(
+            "Сегменты подготовлены к переводу: %s -> %s",
+            len(segments),
+            len(prepared_segments)
+        )
 
-    translated = translate_segments_with_context(
-        model=model_mt,
-        tokenizer=tokenizer,
-        segments=segments,
-        src_lang=cfg.MT_SRC_LANG,
-        tgt_lang=cfg.MT_TGT_LANG,
-        max_chunk_chars=cfg.MT_MAX_CHUNK_CHARS,
-        batch_size=cfg.MT_BATCH_SIZE,
-        max_length=cfg.MT_MAX_LENGTH
+    model_mt, tokenizer = load_translation_model(cfg.MT_MODEL_NAME, cfg.DEVICE)
+
+    logger.info(
+        "Модель перевода: %s | стратегия: %s",
+        cfg.MT_MODEL_NAME,
+        cfg.MT_STRATEGY
     )
+
+    translate_kwargs = {
+        "model": model_mt,
+        "tokenizer": tokenizer,
+        "segments": prepared_segments,
+        "src_lang": cfg.MT_SRC_LANG,
+        "tgt_lang": cfg.MT_TGT_LANG,
+        "batch_size": cfg.MT_BATCH_SIZE,
+        "max_length": cfg.MT_MAX_LENGTH,
+    }
+
+    if cfg.MT_STRATEGY == "per-segment":
+        translated = translate_segments(**translate_kwargs)
+    elif cfg.MT_STRATEGY == "sentence-level":
+        translated = translate_segments_as_sentences(**translate_kwargs)
+    elif cfg.MT_STRATEGY == "sliding-window":
+        translated = translate_segments_sliding_window(
+            **translate_kwargs,
+            window_size=2
+        )
+    elif cfg.MT_STRATEGY == "context-aware":
+        translated = translate_segments_with_context(
+            **translate_kwargs,
+            max_chunk_chars=cfg.MT_MAX_CHUNK_CHARS
+        )
+    else:
+        raise ValueError(
+            f"Неизвестная стратегия перевода: {cfg.MT_STRATEGY}. "
+            "Ожидается per-segment, sentence-level, sliding-window или context-aware."
+        )
+
+    translated = normalize_translated_segments(translated)
 
     with open(paths["translated_segments"], "w", encoding="utf-8") as f:
         json.dump(translated, f, ensure_ascii=False, indent=2)
     logger.info(f"Перевод сохранён ({len(translated)} сегментов): {paths['translated_segments']}")
 
     del model_mt, tokenizer
-    gc.collect(); torch.cuda.empty_cache()
+    gc.collect(); clear_torch_cache()
     logger.info("╚══ Перевод завершён ══╝")
 
 
 def step_tts(paths: dict, suffix: str) -> None:
-    from TTS.tts.layers.xtts.trainer.gpt_trainer import XttsConfig
-    from TTS.tts.models.xtts import Xtts
+    from src.tts_backends import create_tts_backend
     from src.tts import synthesize_segments_with_timing
 
     logger.info("╔══ ШАГ 4: TTS ══╗")
@@ -182,27 +214,41 @@ def step_tts(paths: dict, suffix: str) -> None:
     with open(paths["translated_segments"], "r", encoding="utf-8") as f:
         translated = json.load(f)
 
-    xtts_config = XttsConfig()
-    xtts_config.load_json(os.path.join(cfg.MODEL_TTS_DIR, "config.json"))
+    speaker_source: str | list[str] = paths["speaker_ref"]
+    speaker_profile = None
+    if os.path.exists(paths["speaker_profile"]):
+        with open(paths["speaker_profile"], "r", encoding="utf-8") as f:
+            speaker_profile = json.load(f)
+        clip_paths = [
+            clip["path"]
+            for clip in speaker_profile.get("clips", [])
+            if clip.get("path") and os.path.exists(clip["path"])
+        ]
+        if clip_paths:
+            speaker_source = clip_paths
+            logger.info(
+                "Speaker profile: %s reference clips",
+                len(clip_paths)
+            )
 
-    model_tts = Xtts.init_from_config(xtts_config)
-    model_tts.load_checkpoint(
-        xtts_config,
-        checkpoint_path=os.path.join(cfg.MODEL_TTS_DIR, "model.pth"),
-        vocab_path=os.path.join(cfg.MODEL_TTS_DIR, "vocab.json"),
-        speaker_file_path=os.path.join(cfg.MODEL_TTS_DIR, "speakers_xtts.pth"),
-        eval=True
+    tts_backend = create_tts_backend(
+        device=cfg.DEVICE,
+        xtts_model_dir=cfg.MODEL_TTS_DIR,
     )
-    model_tts.to(cfg.DEVICE)
 
     synthesize_segments_with_timing(
-        model_tts=model_tts,
+        tts_backend=tts_backend,
         segments=translated,
         output_audio_path=paths["final_voice"],
-        speaker_wav=paths["speaker_ref"],
+        speaker_wav=speaker_source,
+        speaker_profile=speaker_profile,
+        reference_audio_path=paths["speaker_ref"],
+        source_vocals_path=paths["vocals"] if os.path.exists(paths["vocals"]) else None,
         language=cfg.LANGUAGE,
         segments_dir=paths["audio_segments_dir"],
         max_speedup_factor=cfg.MAX_SPEEDUP_FACTOR,
+        max_next_start_shift_sec=None,
+        speedup_tail_padding_ms=cfg.SPEEDUP_TAIL_PADDING_MS,
         min_pause_between_segments=cfg.MIN_PAUSE_SEGMENTS,
         fade_in_out_ms=cfg.FADE_IN_OUT_MS,
         crossfade_ms=cfg.CROSSFADE_MS,
@@ -211,11 +257,58 @@ def step_tts(paths: dict, suffix: str) -> None:
         ratio_compression=cfg.RATIO_COMPRESSION,
         attack_compression=cfg.ATTACK_COMPRESSION,
         release_compression=cfg.RELEASE_COMPRESSION,
-        target_dBFS=cfg.TARGET_DBFS
+        target_dBFS=cfg.TARGET_DBFS,
+        reference_gain_offset_db=cfg.REFERENCE_GAIN_OFFSET_DB,
+        max_segment_boost_db=cfg.MAX_SEGMENT_BOOST_DB,
+        max_segment_cut_db=cfg.MAX_SEGMENT_CUT_DB,
+        peak_ceiling_dbfs=cfg.PEAK_CEILING_DBFS,
+        enable_final_compression=cfg.ENABLE_FINAL_COMPRESSION,
+        enable_segment_routing=cfg.SEGMENT_ROUTING_ENABLED,
+        short_segment_sec=cfg.SEGMENT_ROUTING_SHORT_SEC,
+        max_refs_per_segment=cfg.SEGMENT_ROUTING_MAX_REFS,
+        min_segment_routing_sec=cfg.SEGMENT_ROUTING_MIN_SEC,
+        min_segment_routing_words=cfg.SEGMENT_ROUTING_MIN_WORDS,
+        routing_confidence_margin=cfg.SEGMENT_ROUTING_CONFIDENCE_MARGIN,
+        enable_tts_grouping=cfg.TTS_GROUPING_ENABLED,
+        tts_grouping_max_gap_sec=cfg.TTS_GROUPING_MAX_GAP_SEC,
+        tts_grouping_max_segments=cfg.TTS_GROUPING_MAX_SEGMENTS,
+        tts_grouping_max_chars=cfg.TTS_GROUPING_MAX_CHARS,
+        tts_grouping_max_duration_sec=cfg.TTS_GROUPING_MAX_DURATION_SEC,
+        enable_tts_cheap_tail_guard=cfg.ENABLE_TTS_CHEAP_TAIL_GUARD,
+        tts_cheap_tail_guard_max_segment_sec=cfg.TTS_CHEAP_TAIL_GUARD_MAX_SEGMENT_SEC,
+        tts_cheap_tail_guard_min_overhang_ms=cfg.TTS_CHEAP_TAIL_GUARD_MIN_OVERHANG_MS,
+        tts_cheap_tail_guard_min_gap_ms=cfg.TTS_CHEAP_TAIL_GUARD_MIN_GAP_MS,
+        tts_cheap_tail_guard_min_island_ms=cfg.TTS_CHEAP_TAIL_GUARD_MIN_ISLAND_MS,
+        tts_cheap_tail_guard_max_island_ms=cfg.TTS_CHEAP_TAIL_GUARD_MAX_ISLAND_MS,
+        tts_cheap_tail_guard_search_window_ms=cfg.TTS_CHEAP_TAIL_GUARD_SEARCH_WINDOW_MS,
+        tts_cheap_tail_guard_max_trim_ms=cfg.TTS_CHEAP_TAIL_GUARD_MAX_TRIM_MS,
+        enable_tts_babble_guard=cfg.ENABLE_TTS_BABBLE_GUARD,
+        tts_babble_guard_model_name=cfg.TTS_BABBLE_GUARD_MODEL_NAME,
+        tts_babble_guard_device=cfg.TTS_BABBLE_GUARD_DEVICE,
+        tts_babble_guard_max_segment_sec=cfg.TTS_BABBLE_GUARD_MAX_SEGMENT_SEC,
+        tts_babble_guard_min_gap_ms=cfg.TTS_BABBLE_GUARD_MIN_GAP_MS,
+        tts_babble_guard_min_island_ms=cfg.TTS_BABBLE_GUARD_MIN_ISLAND_MS,
+        tts_babble_guard_max_island_ms=cfg.TTS_BABBLE_GUARD_MAX_ISLAND_MS,
+        tts_babble_guard_search_window_ms=cfg.TTS_BABBLE_GUARD_SEARCH_WINDOW_MS,
+        tts_babble_guard_max_trim_ms=cfg.TTS_BABBLE_GUARD_MAX_TRIM_MS,
+        tts_babble_guard_anchor_words=cfg.TTS_BABBLE_GUARD_ANCHOR_WORDS,
+        enable_tts_asr_retry=cfg.ENABLE_TTS_ASR_RETRY,
+        tts_asr_retry_max_segment_sec=cfg.TTS_ASR_RETRY_MAX_SEGMENT_SEC,
+        tts_asr_retry_attempts=cfg.TTS_ASR_RETRY_ATTEMPTS,
+        tts_asr_retry_min_score=cfg.TTS_ASR_RETRY_MIN_SCORE,
+        enable_short_segment_tail_trim=cfg.SHORT_SEGMENT_TAIL_TRIM_ENABLED,
+        short_segment_tail_trim_min_overhang_ms=cfg.SHORT_SEGMENT_TAIL_TRIM_MIN_OVERHANG_MS,
+        short_segment_tail_trim_max_ms=cfg.SHORT_SEGMENT_TAIL_TRIM_MAX_MS,
+        short_segment_tail_trim_max_ratio=cfg.SHORT_SEGMENT_TAIL_TRIM_MAX_RATIO,
+        enable_segment_matching=cfg.SEGMENT_MATCHING_ENABLED,
+        segment_match_padding_ms=cfg.SEGMENT_MATCH_PADDING_MS,
+        segment_match_strength=cfg.SEGMENT_MATCH_STRENGTH,
+        segment_match_max_delta_db=cfg.SEGMENT_MATCH_MAX_DELTA_DB,
+        segment_match_min_active_ratio=cfg.SEGMENT_MATCH_MIN_ACTIVE_RATIO
     )
 
-    del model_tts
-    gc.collect(); torch.cuda.empty_cache()
+    del tts_backend
+    gc.collect(); clear_torch_cache()
     logger.info("╚══ TTS завершён ══╝")
 
 
@@ -267,13 +360,95 @@ def step_metrics(paths: dict, suffix: str) -> None:
     model_asr = whisper.load_model(cfg.WHISPER_MODEL_NAME).to(cfg.DEVICE)
     wer_cer   = compute_wer_cer(model_asr, paths["final_voice"], translated)
     del model_asr
-    gc.collect(); torch.cuda.empty_cache()
+    gc.collect(); clear_torch_cache()
 
     labse = compute_labse_similarity(segments, translated)
 
+    metrics_summary = {
+        "job_name": suffix,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "original_video": paths["original_video"],
+        "speaker_ref": paths["speaker_ref"],
+        "final_voice": paths["final_voice"],
+        "translated_segments": paths["translated_segments"],
+        "translation": {
+            "model_name": cfg.MT_MODEL_NAME,
+            "strategy": cfg.MT_STRATEGY,
+            "batch_size": cfg.MT_BATCH_SIZE,
+            "max_length": cfg.MT_MAX_LENGTH,
+            "max_segment_chars": cfg.MT_MAX_SEGMENT_CHARS,
+        },
+        "runtime": {
+            "device": cfg.DEVICE,
+            "whisper_model": cfg.WHISPER_MODEL_NAME,
+            "tts_backend": "xtts",
+        },
+        "metrics": {
+            "speaker_verification": spk_score,
+            "wer": wer_cer.get("wer"),
+            "cer": wer_cer.get("cer"),
+            "labse_mean": labse.get("mean"),
+            "labse_min": labse.get("min"),
+            "labse_max": labse.get("max"),
+            "labse_n": len(labse.get("per_segment", [])),
+        },
+    }
+    with open(paths["metrics_summary"], "w", encoding="utf-8") as f:
+        json.dump(metrics_summary, f, ensure_ascii=False, indent=2)
+
     print_metrics_summary(spk_score, wer_cer, labse)
     plot_labse(labse, title=f"[{suffix}] Zero-Shot —")
+    logger.info("Сводка метрик сохранена: %s", paths["metrics_summary"])
     logger.info("╚══ Метрики подсчитаны ══╝")
+
+
+def step_prepare_finetune(paths: dict, suffix: str) -> None:
+    from src.finetune import prepare_finetune_dataset
+
+    logger.info("╔══ ШАГ 7: ПОДГОТОВКА ДАТАСЕТА ДЛЯ FINETUNE ══╗")
+    check_file(paths["segments"], "prepare_finetune")
+
+    source_candidates = [
+        paths.get(cfg.FINETUNE_SOURCE_AUDIO),
+        paths.get("vocals"),
+        paths.get("vocals_processed"),
+        paths.get("original_audio"),
+    ]
+    source_audio = next(
+        (candidate for candidate in source_candidates if candidate and os.path.exists(candidate)),
+        None
+    )
+    if not source_audio:
+        logger.error("Не найдено аудио для подготовки датасета.")
+        logger.error("Сначала запустите preprocess и asr.")
+        sys.exit(1)
+
+    with open(paths["segments"], "r", encoding="utf-8") as f:
+        segments = json.load(f)
+
+    dataset_root = os.path.join(cfg.FINETUNE_DATA_ROOT, suffix)
+    speaker_name = cfg.FINETUNE_SPEAKER_NAME or f"{suffix}_original"
+    result = prepare_finetune_dataset(
+        audio_path=source_audio,
+        segments=segments,
+        dataset_root=dataset_root,
+        speaker_name=speaker_name,
+        sample_rate=cfg.FINETUNE_SAMPLE_RATE,
+        min_sec=cfg.FINETUNE_CLIP_MIN_SEC,
+        max_sec=cfg.FINETUNE_CLIP_MAX_SEC,
+        min_chars=cfg.FINETUNE_MIN_TEXT_CHARS,
+        max_chars=cfg.FINETUNE_MAX_TEXT_CHARS,
+        padding_ms=cfg.FINETUNE_PADDING_MS,
+        eval_ratio=cfg.FINETUNE_EVAL_RATIO,
+        max_eval_samples=cfg.FINETUNE_MAX_EVAL_SAMPLES,
+        reference_clips=cfg.FINETUNE_REFERENCE_CLIPS,
+        seed=cfg.SEED,
+        target_speaker_id=cfg.DEFAULT_SPEAKER_ID
+    )
+
+    logger.info("Fine-tune dataset: %s", result["paths"]["root"])
+    logger.info("Speaker name для обучения: %s", speaker_name)
+    logger.info("╚══ Датасет для finetune подготовлен ══╝")
 
 
 # ─── Регистр шагов ───────────────────────────────────────────────────────────
@@ -285,6 +460,7 @@ STEPS = {
     "tts":         step_tts,
     "postprocess": step_postprocess,
     "metrics":     step_metrics,
+    "prepare_finetune": step_prepare_finetune,
 }
 
 ALL_STEPS = ["preprocess", "asr", "translate", "tts", "postprocess", "metrics"]
@@ -309,39 +485,103 @@ if __name__ == "__main__":
             "  tts         — синтез речи + синхронизация\n"
             "  postprocess — микширование + сборка видео\n"
             "  metrics     — подсчёт метрик качества\n"
+            "  prepare_finetune — подготовка датасета для XTTS fine-tuning\n"
             "  all         — весь пайплайн целиком"
         )
     )
     parser.add_argument(
+        "--video",
+        default=None,
+        help=(
+            "Путь к входному видео. "
+            "Если не указан, берётся единственное видео из ./data/input/ "
+            "или legacy-файл по --suffix."
+        )
+    )
+    parser.add_argument(
+        "--job-name",
+        default=None,
+        help=(
+            "Имя задания для артефактов. "
+            "По умолчанию берётся из имени файла видео."
+        )
+    )
+    parser.add_argument(
         "--suffix",
-        default=cfg.SUFFIX,
-        help=f"Суффикс спикера (по умолчанию: '{cfg.SUFFIX}'). Пример: --suffix woman"
+        default=None,
+        help=(
+            f"Legacy-режим старого нейминга: ищет video_<suffix>.mp4 "
+            f"в {cfg.INPUT_PATH}. Если не указан, suffix больше не обязателен."
+        )
     )
     parser.add_argument(
         "--test",
         action="store_true",
         help="Тестовый режим: данные сохраняются в ./data/test/ (production не трогается)"
     )
-
+    parser.add_argument(
+        "--mt-model",
+        default=None,
+        help=(
+            "Переопределить модель перевода для текущего запуска. "
+            "Пример: facebook/nllb-200-distilled-1.3B или gemini-2.5-flash."
+        )
+    )
+    parser.add_argument(
+        "--mt-strategy",
+        choices=["per-segment", "sentence-level", "sliding-window", "context-aware"],
+        default=None,
+        help="Переопределить стратегию перевода для текущего запуска."
+    )
     args = parser.parse_args()
 
     seed_everything(cfg.SEED)
 
-    paths = build_paths(suffix=args.suffix, test=args.test)
+    if args.mt_model:
+        cfg.MT_MODEL_NAME = args.mt_model
+    if args.mt_strategy:
+        cfg.MT_STRATEGY = args.mt_strategy
+
+    try:
+        input_video = resolve_input_video(
+            video_path=args.video,
+            input_dir=cfg.INPUT_PATH,
+            extensions=cfg.INPUT_VIDEO_EXTENSIONS,
+            legacy_suffix=args.suffix
+        )
+        job_name = derive_job_name(
+            video_path=input_video,
+            explicit_job_name=args.job_name,
+            legacy_suffix=args.suffix
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+    paths = build_pipeline_paths(
+        video_path=input_video,
+        job_name=job_name,
+        output_root=cfg.OUTPUT_PATH,
+        test_output_root=cfg.TEST_OUTPUT_PATH,
+        test=args.test
+    )
     ensure_dirs(paths)
 
     mode = "ТЕСТ" if args.test else "PRODUCTION"
     logger.info(f"{'='*50}")
     logger.info(f"Режим:    {mode}")
-    logger.info(f"Спикер:   {args.suffix}")
+    logger.info(f"Задание:  {job_name}")
     logger.info(f"Шаг:      {args.step}")
+    logger.info(f"Видео:    {paths['original_video']}")
     logger.info(f"Выходная: {paths['output']}")
+    logger.info(f"MT:       {cfg.MT_MODEL_NAME} | {cfg.MT_STRATEGY}")
+    logger.info("TTS:      xtts")
     logger.info(f"{'='*50}")
 
     if args.step == "all":
         for step_name in ALL_STEPS:
-            STEPS[step_name](paths, args.suffix)
+            STEPS[step_name](paths, job_name)
     else:
-        STEPS[args.step](paths, args.suffix)
+        STEPS[args.step](paths, job_name)
 
     logger.info("Готово.")

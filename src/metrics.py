@@ -101,12 +101,33 @@ def compute_labse_similarity(
 
     model = SentenceTransformer("LaBSE")
 
-    orig_texts  = [s["text"].strip() for s in original_segments   if s.get("text")]
-    trans_texts = [s["text"].strip() for s in translated_segments if s.get("text")]
+    paired_from_translation = [
+        (
+            s["original_text"].strip(),
+            s["text"].strip()
+        )
+        for s in translated_segments
+        if s.get("original_text") and s.get("text")
+    ]
 
-    min_len     = min(len(orig_texts), len(trans_texts))
-    orig_texts  = orig_texts[:min_len]
-    trans_texts = trans_texts[:min_len]
+    if paired_from_translation:
+        orig_texts = [orig for orig, _ in paired_from_translation]
+        trans_texts = [trans for _, trans in paired_from_translation]
+        logger.info(
+            "LaBSE считает сходство по original_text внутри translated_segments (%s пар).",
+            len(paired_from_translation)
+        )
+    else:
+        orig_texts = [s["text"].strip() for s in original_segments if s.get("text")]
+        trans_texts = [s["text"].strip() for s in translated_segments if s.get("text")]
+
+        min_len = min(len(orig_texts), len(trans_texts))
+        orig_texts = orig_texts[:min_len]
+        trans_texts = trans_texts[:min_len]
+
+    if not orig_texts or not trans_texts:
+        logger.warning("Недостаточно данных для расчёта LaBSE.")
+        return {}
 
     emb_orig  = model.encode(orig_texts,  show_progress_bar=True)
     emb_trans = model.encode(trans_texts, show_progress_bar=True)

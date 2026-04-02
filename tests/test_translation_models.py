@@ -2,11 +2,13 @@
 Сравнение моделей и стратегий перевода:
     nllb-600M  × {per-segment, sentence-level}
     nllb-1.3B  × {per-segment, sentence-level}
+    qwen-3B    × {per-segment, sentence-level}
 
 Запуск:
     python tests/test_translation_models.py
     python tests/test_translation_models.py --segments path/to/segments.json
     python tests/test_translation_models.py --pause 0.5
+    python tests/test_translation_models.py --models qwen2.5-3B
 
 Результаты сохраняются в ./data/test/
 """
@@ -26,7 +28,11 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
-from src.translation import translate_segments, translate_segments_as_sentences
+from src.translation import (
+    load_translation_model,
+    translate_segments,
+    translate_segments_as_sentences,
+)
 from utils.helpers import manage_directory
 
 logging.basicConfig(
@@ -39,21 +45,9 @@ logger = logging.getLogger(__name__)
 MODELS = {
     "nllb-600M": "facebook/nllb-200-distilled-600M",
     "nllb-1.3B": "facebook/nllb-200-distilled-1.3B",
+    "qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
+    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite-preview-09-2025",
 }
-
-
-def load_model(model_name: str, device: str):
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-    logger.info(f"Загрузка: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto" if device == "cuda" else None
-    )
-    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
-    model.eval()
-    return model, tokenizer
 
 
 def compute_labse(translated_segments) -> dict:
@@ -119,6 +113,10 @@ def plot_comparison(results: dict, save_path: str = None) -> None:
         "nllb-600M × sentence-level":   "deepskyblue",
         "nllb-1.3B × per-segment":      "darkorange",
         "nllb-1.3B × sentence-level":   "green",
+        "qwen2.5-3B × per-segment":     "firebrick",
+        "qwen2.5-3B × sentence-level":  "salmon",
+        "gemini-2.5-flash-lite × per-segment":    "mediumpurple",
+        "gemini-2.5-flash-lite × sentence-level": "orchid",
     }
     style_map = {
         "per-segment":    "-",
@@ -169,7 +167,12 @@ def plot_comparison(results: dict, save_path: str = None) -> None:
     plt.show()
 
 
-def run_test(segments_path: str, suffix: str, max_pause: float) -> None:
+def run_test(
+    segments_path: str,
+    suffix: str,
+    max_pause: float,
+    selected_models: list[str] | None = None
+) -> None:
     out_dir = "./data/test"
     manage_directory(out_dir, action="create")
 
@@ -183,12 +186,25 @@ def run_test(segments_path: str, suffix: str, max_pause: float) -> None:
 
     all_results = {}
 
-    for model_label, model_name in MODELS.items():
+    available_models = MODELS
+    if selected_models:
+        requested = {name.strip() for name in selected_models if name.strip()}
+        unknown = sorted(requested - set(MODELS))
+        if unknown:
+            logger.error("Неизвестные модели: %s", ", ".join(unknown))
+            sys.exit(1)
+        available_models = {
+            label: name
+            for label, name in MODELS.items()
+            if label in requested
+        }
+
+    for model_label, model_name in available_models.items():
         logger.info(f"\n{'='*60}")
         logger.info(f"▶ Модель: {model_label} ({model_name})")
         logger.info(f"{'='*60}")
 
-        model, tokenizer = load_model(model_name, cfg.DEVICE)
+        model, tokenizer = load_translation_model(model_name, cfg.DEVICE)
 
         # Per-segment
         logger.info(f"  Стратегия: per-segment")
@@ -252,10 +268,21 @@ if __name__ == "__main__":
     parser.add_argument("--segments", default=None)
     parser.add_argument("--pause",    type=float, default=0.5,
                         help="Макс. пауза для склейки sentence-level (по умолчанию: 0.5)")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="Какие модели считать. Пример: --models nllb-1.3B qwen2.5-3B gemini-2.5-flash-lite"
+    )
     args = parser.parse_args()
 
     segments_path = args.segments or os.path.join(
         cfg.OUTPUT_PATH, f"segments_{args.suffix}.json"
     )
 
-    run_test(segments_path=segments_path, suffix=args.suffix, max_pause=args.pause)
+    run_test(
+        segments_path=segments_path,
+        suffix=args.suffix,
+        max_pause=args.pause,
+        selected_models=args.models
+    )

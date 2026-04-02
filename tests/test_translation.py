@@ -27,9 +27,12 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
-from src.translation import (translate_segments,
-                              translate_segments_sliding_window,
-                              translate_segments_as_sentences)
+from src.translation import (
+    load_translation_model,
+    translate_segments,
+    translate_segments_as_sentences,
+    translate_segments_sliding_window,
+)
 from utils.helpers import manage_directory
 
 logging.basicConfig(
@@ -37,22 +40,6 @@ logging.basicConfig(
     format="%(asctime)s - [%(levelname)s] - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-def load_model(device: str):
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-    logger.info(f"Загрузка модели: {cfg.MT_MODEL_NAME}")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.MT_MODEL_NAME)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        cfg.MT_MODEL_NAME,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto" if device == "cuda" else None
-    )
-    # Не вызываем .to("cuda") — device_map="auto" уже всё расставил
-    model.eval()
-    logger.info("Модель загружена.")
-    return model, tokenizer
-
 
 def compute_labse(original_segments, translated_segments) -> dict:
     """
@@ -161,7 +148,7 @@ def run_test(segments_path: str, suffix: str,
         segments = json.load(f)
     logger.info(f"Загружено сегментов: {len(segments)}")
 
-    model, tokenizer = load_model(cfg.DEVICE)
+    model, tokenizer = load_translation_model(cfg.MT_MODEL_NAME, cfg.DEVICE)
     all_results = {}
 
     # ── Тест 1: Per-segment ───────────────────────────────────────────────────

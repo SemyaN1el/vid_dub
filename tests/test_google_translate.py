@@ -212,6 +212,10 @@ def run_test(segments_path: str, suffix: str, compare: bool) -> None:
             "NLLB-1.3B per-segment":    f"translated_nllb-1.3B_per_segment_{suffix}.json",
             "NLLB-600M sentence-level": f"translated_nllb-600M_sentence_level_{suffix}.json",
             "NLLB-1.3B sentence-level": f"translated_nllb-1.3B_sentence_level_{suffix}.json",
+            "Qwen2.5-3B per-segment":   f"translated_qwen2.5-3B_per_segment_{suffix}.json",
+            "Qwen2.5-3B sentence-level": f"translated_qwen2.5-3B_sentence_level_{suffix}.json",
+            "Gemini 2.5 Flash-Lite per-segment": f"translated_gemini-2.5-flash-lite_per_segment_{suffix}.json",
+            "Gemini 2.5 Flash-Lite sentence-level": f"translated_gemini-2.5-flash-lite_sentence_level_{suffix}.json",
         }
         for name, fname in candidates.items():
             fpath = os.path.join(out_dir, fname)

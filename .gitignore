@@ -1,4 +1,57 @@
-original_tts_model/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Editors / local tooling
+.vscode/
+.VSCodeCounter/
+.vendor/
+
+# Jupyter / notebooks
+final.ipynb
 **/final.ipynb
+.ipynb_checkpoints/
+
+# Runtime data and generated artifacts
 data/
+models/
+original_tts_model/
+
+# Local configuration / secrets
 config.py
+.env
+.env.*
+
+# Research / thesis materials
+articles/
+thesis/
+*.docx
+*.pdf
+*.pptx
+
+# Local notes and extracted helper files
+draft_extracted.txt
+methodichka_extracted.txt
+vkr_methodichka_notes.md
+vkr_chapter3_conclusion.md
+tmp_*.json
+tmp_*.txt
+segments_*.json
+*translated*.json
+
+# Large local media / exports
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+
+# Model / third-party experiment folders
+third_party/CosyVoice/

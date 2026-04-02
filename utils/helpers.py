@@ -4,8 +4,12 @@ import shutil
 import random
 import logging
 import numpy as np
-import torch
 from typing import NoReturn
+
+try:
+    import torch
+except ImportError:
+    torch = None
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +19,12 @@ def seed_everything(seed: int = 42) -> None:
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch is not None:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
     logger.info(f"Seed зафиксирован: {seed}")
 
 
@@ -71,10 +77,15 @@ def free_gpu_memory(*model_names: str, global_vars: dict = None) -> None:
                 logger.warning(f"Переменная не найдена: {name}")
 
     gc.collect()
-    torch.cuda.empty_cache()
-    allocated = torch.cuda.memory_allocated() / 1024 ** 2
-    reserved  = torch.cuda.memory_reserved()  / 1024 ** 2
-    logger.info(f"GPU после очистки — занято: {allocated:.1f} MB, зарезервировано: {reserved:.1f} MB")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        allocated = torch.cuda.memory_allocated() / 1024 ** 2
+        reserved  = torch.cuda.memory_reserved()  / 1024 ** 2
+        logger.info(
+            f"GPU после очистки — занято: {allocated:.1f} MB, зарезервировано: {reserved:.1f} MB"
+        )
+    else:
+        logger.info("Очистка GPU-кэша пропущена: torch/cuda недоступны.")
 
 
 def normalize_path(path: str) -> str:
