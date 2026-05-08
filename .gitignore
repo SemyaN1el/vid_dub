@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
+*.log
 
 # Editors / local tooling
 .vscode/
@@ -32,6 +34,7 @@ thesis/
 *.pptx
 
 # Local notes and extracted helper files
+cleanup_archives/
 draft_extracted.txt
 methodichka_extracted.txt
 vkr_methodichka_notes.md

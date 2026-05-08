@@ -5,10 +5,10 @@
     qwen-3B    × {per-segment, sentence-level}
 
 Запуск:
-    python tests/test_translation_models.py
-    python tests/test_translation_models.py --segments path/to/segments.json
-    python tests/test_translation_models.py --pause 0.5
-    python tests/test_translation_models.py --models qwen2.5-3B
+    python experiments/compare_translation_models.py
+    python experiments/compare_translation_models.py --segments path/to/segments.json
+    python experiments/compare_translation_models.py --pause 0.5
+    python experiments/compare_translation_models.py --models qwen2.5-3B
 
 Результаты сохраняются в ./data/test/
 """
@@ -28,6 +28,7 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
+from experiments._experiment_paths import resolve_segments_path
 from src.translation import (
     load_translation_model,
     translate_segments,
@@ -276,8 +277,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    segments_path = args.segments or os.path.join(
-        cfg.OUTPUT_PATH, f"segments_{args.suffix}.json"
+    segments_path = args.segments or str(
+        resolve_segments_path(cfg.OUTPUT_PATH, args.suffix, cfg.TEST_OUTPUT_PATH)
     )
 
     run_test(

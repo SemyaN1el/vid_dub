@@ -2,12 +2,12 @@
 Сравнивает готовые pipeline-выходы двух переводчиков по сохранённым артефактам.
 
 Сценарий:
-    - в data/output уже лежат segments_<job>.json
-    - текущие translated_segments_<job>.json / final_dubbing_<job>.wav
-    - backup translated_segments_<job>.<tag>.json / final_dubbing_<job>.<tag>.wav
+    - в data/output/<job>/ уже лежат segments.json
+    - текущие translated_segments.json / final_dubbing.wav
+    - backup translated_segments.<tag>.json / final_dubbing.<tag>.wav
 
 Пример:
-    python tests/compare_translator_outputs.py ^
+    python experiments/compare_translator_outputs.py ^
         --jobs man_tailfix speaking_skills_5min ^
         --current-label "Gemini 2.5 Flash per-segment" ^
         --backup-label "NLLB-1.3B per-segment" ^
@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
+from experiments._experiment_paths import resolve_job_artifacts
 from src.metrics import (
     compute_labse_similarity,
     compute_wer_cer,
@@ -171,12 +172,13 @@ def main() -> None:
         }
 
         for job in args.jobs:
-            segments_path = base_dir / f"segments_{job}.json"
-            speaker_ref_path = base_dir / "temp" / f"speaker_ref_{job}.wav"
-            current_translated = base_dir / f"translated_segments_{job}.json"
-            current_final_voice = base_dir / f"final_dubbing_{job}.wav"
-            backup_translated = base_dir / f"translated_segments_{job}.{args.backup_tag}.json"
-            backup_final_voice = base_dir / f"final_dubbing_{job}.{args.backup_tag}.wav"
+            paths = resolve_job_artifacts(base_dir, job, args.backup_tag)
+            segments_path = paths["segments"]
+            speaker_ref_path = paths["speaker_ref"]
+            current_translated = paths["current_translated"]
+            current_final_voice = paths["current_final_voice"]
+            backup_translated = paths["backup_translated"]
+            backup_final_voice = paths["backup_final_voice"]
 
             required_paths = [
                 segments_path,

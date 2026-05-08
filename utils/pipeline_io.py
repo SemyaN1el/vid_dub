@@ -100,6 +100,66 @@ def derive_job_name(
     return sanitize_job_name(stem or "job")
 
 
+def resolve_artifact_root(
+    output_root: str,
+    test_output_root: str,
+    test: bool = False
+) -> str:
+    """Возвращает корневую директорию артефактов с учётом test-режима."""
+    root = test_output_root if test else output_root
+    return os.path.abspath(root)
+
+
+def build_job_artifact_paths(job_name: str, base_root: str) -> Dict[str, str]:
+    """
+    Строит структуру путей внутри отдельной папки задания.
+
+    Структура:
+        <base_root>/<job_name>/
+            segments.json
+            translated_segments.json
+            final_dubbing.wav
+            final_mix.wav
+            final_video.mp4
+            metrics.json
+            temp/
+                original_extracted_audio.wav
+                speaker_ref.wav
+                speaker_profile.json
+                vocals.wav
+                vocals_processed.wav
+                background.wav
+                speaker_refs/
+                audio_segments/
+    """
+    safe_job_name = sanitize_job_name(job_name)
+    job_dir = os.path.join(os.path.abspath(base_root), safe_job_name)
+    temp_dir = os.path.join(job_dir, "temp")
+
+    return {
+        "job_name":            safe_job_name,
+        "root_output":         os.path.abspath(base_root),
+        "output":              job_dir,
+        "job_dir":             job_dir,
+        "temp":                temp_dir,
+        "original_audio":      os.path.join(temp_dir, "original_extracted_audio.wav"),
+        "speaker_ref":         os.path.join(temp_dir, "speaker_ref.wav"),
+        "speaker_refs_dir":    os.path.join(temp_dir, "speaker_refs"),
+        "speaker_profile":     os.path.join(temp_dir, "speaker_profile.json"),
+        "vocals":              os.path.join(temp_dir, "vocals.wav"),
+        "vocals_processed":    os.path.join(temp_dir, "vocals_processed.wav"),
+        "background":          os.path.join(temp_dir, "background.wav"),
+        "final_voice":         os.path.join(job_dir, "final_dubbing.wav"),
+        "final_mix":           os.path.join(job_dir, "final_mix.wav"),
+        "final_video":         os.path.join(job_dir, "final_video.mp4"),
+        "metrics_summary":     os.path.join(job_dir, "metrics.json"),
+        "segments":            os.path.join(job_dir, "segments.json"),
+        "translated_segments": os.path.join(job_dir, "translated_segments.json"),
+        "audio_segments_dir":  os.path.join(temp_dir, "audio_segments"),
+        "subtitles_dir":       os.path.join(job_dir, "subtitles"),
+    }
+
+
 def build_pipeline_paths(
     video_path: str,
     job_name: str,
@@ -108,27 +168,10 @@ def build_pipeline_paths(
     test: bool = False
 ) -> Dict[str, str]:
     """Строит словарь путей пайплайна из видео и имени задания."""
-    base_out = test_output_root if test else output_root
-    temp = os.path.join(base_out, "temp")
-
-    return {
-        "job_name":            job_name,
-        "input":               os.path.dirname(video_path),
-        "output":              base_out,
-        "temp":                temp,
-        "original_video":      os.path.abspath(video_path),
-        "original_audio":      os.path.join(temp,     f"original_extracted_audio_{job_name}.wav"),
-        "speaker_ref":         os.path.join(temp,     f"speaker_ref_{job_name}.wav"),
-        "speaker_refs_dir":    os.path.join(temp,     f"speaker_refs_{job_name}"),
-        "speaker_profile":     os.path.join(temp,     f"speaker_profile_{job_name}.json"),
-        "vocals":              os.path.join(temp,     f"vocals_{job_name}.wav"),
-        "vocals_processed":    os.path.join(temp,     f"vocals_processed_{job_name}.wav"),
-        "background":          os.path.join(temp,     f"background_{job_name}.wav"),
-        "final_voice":         os.path.join(base_out, f"final_dubbing_{job_name}.wav"),
-        "final_mix":           os.path.join(base_out, f"final_mix_{job_name}.wav"),
-        "final_video":         os.path.join(base_out, f"final_video_{job_name}.mp4"),
-        "metrics_summary":     os.path.join(base_out, f"metrics_{job_name}.json"),
-        "segments":            os.path.join(base_out, f"segments_{job_name}.json"),
-        "translated_segments": os.path.join(base_out, f"translated_segments_{job_name}.json"),
-        "audio_segments_dir":  os.path.join(temp,     "audio_segments"),
-    }
+    base_out = resolve_artifact_root(output_root, test_output_root, test)
+    paths = build_job_artifact_paths(job_name, base_out)
+    paths.update({
+        "input":          os.path.dirname(video_path),
+        "original_video": os.path.abspath(video_path),
+    })
+    return paths

@@ -21,6 +21,55 @@ class WordSegment:
     end:   float
 
 
+def _word_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _build_words_with_silence(words: List[WordSegment]) -> str:
+    parts: List[str] = []
+    cleaned_words = [word for word in words if _word_text(word.text)]
+    for idx, word in enumerate(cleaned_words):
+        parts.append(_word_text(word.text))
+        if idx < len(cleaned_words) - 1:
+            gap_sec = max(0.0, cleaned_words[idx + 1].start - word.end)
+            if gap_sec >= 0.04:
+                parts.append(f"<{gap_sec:.2f}s>")
+    return " ".join(parts)
+
+
+def _segment_from_words(
+    words: List[WordSegment],
+    speaker_id: str,
+    pause_before_sec: float,
+    pause_after_sec: float
+) -> Dict[str, Any]:
+    cleaned_words = [word for word in words if _word_text(word.text)]
+    if not cleaned_words:
+        raise ValueError("Нельзя создать сегмент без слов.")
+
+    start = float(cleaned_words[0].start)
+    end = float(cleaned_words[-1].end)
+    return {
+        "text": " ".join(_word_text(word.text) for word in cleaned_words),
+        "start": round(start, 3),
+        "end": round(end, 3),
+        "speaker_id": speaker_id,
+        "words": [
+            {
+                "text": _word_text(word.text),
+                "start": round(float(word.start), 3),
+                "end": round(float(word.end), 3),
+            }
+            for word in cleaned_words
+        ],
+        "words_with_silence": _build_words_with_silence(cleaned_words),
+        "source_duration_sec": round(max(0.0, end - start), 3),
+        "source_word_count": len(cleaned_words),
+        "pause_before_sec": round(max(0.0, pause_before_sec), 3),
+        "pause_after_sec": round(max(0.0, pause_after_sec), 3),
+    }
+
+
 def _normalize_reference_text(text: str) -> str:
     """Нормализует текст для дедупликации похожих референсов."""
     normalized = re.sub(r"[^\w\s]", " ", text.lower(), flags=re.UNICODE)
@@ -497,38 +546,48 @@ def transcribe_and_segment(
     words: List[WordSegment] = []
     for segment in result["segments"]:
         for w in segment.get("words", []):
-            words.append(WordSegment(text=w["word"], start=w["start"], end=w["end"]))
+            text = w.get("word", w.get("text", ""))
+            words.append(
+                WordSegment(
+                    text=text,
+                    start=float(w["start"]),
+                    end=float(w["end"])
+                )
+            )
 
     if not words:
         logger.error("Слова с временными метками не найдены.")
         return []
 
-    # Разбиваем на сегменты по паузам
-    segments = []
-    current = {
-        "text": words[0].text,
-        "start": words[0].start,
-        "end": words[0].end,
-        "speaker_id": default_speaker_id
-    }
+    # Разбиваем на сегменты по паузам, сохраняя word-level тайминги
+    segments: List[Dict[str, Any]] = []
+    current_words: List[WordSegment] = [words[0]]
+    pause_before_sec = 0.0
 
     for i in range(1, len(words)):
         gap = words[i].start - words[i - 1].end
         if gap > max_pause_between_sentences:
-            current["text"] = current["text"].strip()
-            segments.append(current)
-            current = {
-                "text": words[i].text,
-                "start": words[i].start,
-                "end": words[i].end,
-                "speaker_id": default_speaker_id
-            }
+            segments.append(
+                _segment_from_words(
+                    current_words,
+                    speaker_id=default_speaker_id,
+                    pause_before_sec=pause_before_sec,
+                    pause_after_sec=gap
+                )
+            )
+            current_words = [words[i]]
+            pause_before_sec = gap
         else:
-            current["text"] += " " + words[i].text
-            current["end"]   = words[i].end
+            current_words.append(words[i])
 
-    current["text"] = current["text"].strip()
-    segments.append(current)
+    segments.append(
+        _segment_from_words(
+            current_words,
+            speaker_id=default_speaker_id,
+            pause_before_sec=pause_before_sec,
+            pause_after_sec=0.0
+        )
+    )
     logger.info(f"Сегментов получено: {len(segments)}")
 
     try:

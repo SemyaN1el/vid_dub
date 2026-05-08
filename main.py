@@ -11,15 +11,17 @@
     python main.py --step translate --mt-model gemini-2.5-flash --mt-strategy per-segment
     python main.py --step all --suffix woman --test  # всё вместе
 
-Доступные шаги: preprocess, asr, translate, tts, postprocess, metrics,
+Доступные шаги: preprocess, asr, translate, tts, postprocess, subtitles, metrics,
                  prepare_finetune, all
 """
 
 import argparse
 import gc
+import importlib.util
 import json
 import logging
 import os
+import shutil
 import sys
 from datetime import datetime
 
@@ -57,6 +59,81 @@ def check_file(path: str, step_name: str) -> None:
         sys.exit(1)
 
 
+def _module_exists(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def check_environment() -> bool:
+    """Проверяет локальное окружение без загрузки тяжёлых моделей."""
+    checks: list[tuple[str, bool, str, bool]] = []
+
+    def add(name: str, ok: bool, detail: str = "", required: bool = True) -> None:
+        checks.append((name, ok, detail, required))
+
+    for executable in ("ffmpeg", "demucs"):
+        path = shutil.which(executable)
+        add(f"CLI: {executable}", path is not None, path or "не найден в PATH")
+
+    required_modules = (
+        "numpy",
+        "soundfile",
+        "pydub",
+        "scipy",
+        "noisereduce",
+        "tqdm",
+        "torch",
+        "whisper",
+        "transformers",
+        "TTS",
+    )
+    for module_name in required_modules:
+        add(f"Python: {module_name}", _module_exists(module_name))
+
+    metrics_modules = (
+        "jiwer",
+        "resemblyzer",
+        "sentence_transformers",
+        "sklearn",
+    )
+    for module_name in metrics_modules:
+        add(f"Python metrics: {module_name}", _module_exists(module_name))
+
+    model_files = ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth")
+    for filename in model_files:
+        path = os.path.join(cfg.MODEL_TTS_DIR, filename)
+        add(f"XTTS: {filename}", os.path.exists(path), path)
+
+    if cfg.ASR_PROVIDER == "groq":
+        add("Python API: openai", _module_exists("openai"))
+        api_key = os.getenv(cfg.ASR_API_KEY_ENV, "").strip()
+        add(f"ASR API key: {cfg.ASR_API_KEY_ENV}", bool(api_key))
+    if cfg.METRICS_ASR_PROVIDER == "groq":
+        add("Python API: openai", _module_exists("openai"))
+        api_key = os.getenv(cfg.METRICS_ASR_API_KEY_ENV, "").strip()
+        add(f"Metrics ASR API key: {cfg.METRICS_ASR_API_KEY_ENV}", bool(api_key))
+    if cfg.MT_MODEL_NAME.strip().lower().startswith("gemini-"):
+        api_key = os.getenv(cfg.MT_GEMINI_API_KEY_ENV, "").strip()
+        add(f"Gemini API key: {cfg.MT_GEMINI_API_KEY_ENV}", bool(api_key))
+    if cfg.SMART_SYNC_ENABLED:
+        if cfg.SMART_SYNC_PROVIDER in {"groq", "openai", "openai_compatible"}:
+            add("Python API: openai", _module_exists("openai"))
+        api_key = os.getenv(cfg.SMART_SYNC_API_KEY_ENV, "").strip()
+        add(f"SmartSync API key: {cfg.SMART_SYNC_API_KEY_ENV}", bool(api_key))
+
+    failed = False
+    for name, ok, detail, required in checks:
+        status = "OK" if ok else ("FAIL" if required else "WARN")
+        logger.info("%-42s %s %s", name, status, detail)
+        failed = failed or (required and not ok)
+
+    if failed:
+        logger.error("Окружение неполное. Исправьте FAIL-пункты перед полным запуском.")
+        return False
+
+    logger.info("Окружение готово для полного пайплайна.")
+    return True
+
+
 # ─── Шаги пайплайна ──────────────────────────────────────────────────────────
 
 def step_preprocess(paths: dict, suffix: str) -> None:
@@ -74,6 +151,18 @@ def step_preprocess(paths: dict, suffix: str) -> None:
         device=cfg.DEVICE,
         suffix=suffix
     )
+    canonical_vocals = paths["vocals"]
+    if os.path.abspath(vocals) != os.path.abspath(canonical_vocals):
+        shutil.copyfile(vocals, canonical_vocals)
+        vocals = canonical_vocals
+
+    background_candidate = os.path.join(paths["temp"], f"background_{suffix}.wav")
+    canonical_background = paths["background"]
+    if (
+        os.path.exists(background_candidate)
+        and os.path.abspath(background_candidate) != os.path.abspath(canonical_background)
+    ):
+        shutil.copyfile(background_candidate, canonical_background)
 
     preprocess_audio_for_asr(
         input_path=vocals,
@@ -89,13 +178,13 @@ def step_preprocess(paths: dict, suffix: str) -> None:
 
 
 def step_asr(paths: dict, suffix: str) -> None:
-    import whisper
     from src.asr import transcribe_and_segment
+    from src.asr_backend import load_main_asr_model
 
     logger.info("╔══ ШАГ 2: ASR ══╗")
     check_file(paths["vocals_processed"], "asr")
 
-    model_asr = whisper.load_model(cfg.WHISPER_MODEL_NAME).to(cfg.DEVICE)
+    model_asr = load_main_asr_model()
 
     segments = transcribe_and_segment(
         model_asr=model_asr,
@@ -234,9 +323,14 @@ def step_tts(paths: dict, suffix: str) -> None:
     tts_backend = create_tts_backend(
         device=cfg.DEVICE,
         xtts_model_dir=cfg.MODEL_TTS_DIR,
+        temperature=cfg.XTTS_TEMPERATURE,
+        length_penalty=cfg.XTTS_LENGTH_PENALTY,
+        repetition_penalty=cfg.XTTS_REPETITION_PENALTY,
+        top_k=cfg.XTTS_TOP_K,
+        top_p=cfg.XTTS_TOP_P,
     )
 
-    synthesize_segments_with_timing(
+    tts_segments = synthesize_segments_with_timing(
         tts_backend=tts_backend,
         segments=translated,
         output_audio_path=paths["final_voice"],
@@ -247,12 +341,27 @@ def step_tts(paths: dict, suffix: str) -> None:
         language=cfg.LANGUAGE,
         segments_dir=paths["audio_segments_dir"],
         max_speedup_factor=cfg.MAX_SPEEDUP_FACTOR,
-        max_next_start_shift_sec=None,
+        max_next_start_shift_sec=cfg.MAX_NEXT_START_SHIFT_SEC,
         speedup_tail_padding_ms=cfg.SPEEDUP_TAIL_PADDING_MS,
         min_pause_between_segments=cfg.MIN_PAUSE_SEGMENTS,
         fade_in_out_ms=cfg.FADE_IN_OUT_MS,
         crossfade_ms=cfg.CROSSFADE_MS,
         max_shift_left_seconds=cfg.MAX_SHIFT_LEFT_SEC,
+        enable_smart_sync=cfg.SMART_SYNC_ENABLED,
+        smart_sync_device=cfg.DEVICE,
+        smart_sync_src_lang=cfg.MT_SRC_LANG,
+        smart_sync_tgt_lang=cfg.MT_TGT_LANG,
+        smart_sync_max_rewrites=cfg.SMART_SYNC_MAX_REWRITES,
+        smart_sync_trigger_speed_factor=cfg.SMART_SYNC_TRIGGER_SPEED_FACTOR,
+        smart_sync_min_fill_ratio=cfg.SMART_SYNC_MIN_FILL_RATIO,
+        smart_sync_min_improvement_ms=cfg.SMART_SYNC_MIN_IMPROVEMENT_MS,
+        smart_sync_allow_lengthen=cfg.SMART_SYNC_ALLOW_LENGTHEN,
+        smart_sync_accept_min_fill_ratio=cfg.SMART_SYNC_ACCEPT_MIN_FILL_RATIO,
+        smart_sync_accept_min_text_similarity=cfg.SMART_SYNC_ACCEPT_MIN_TEXT_SIMILARITY,
+        smart_sync_accept_min_word_ratio=cfg.SMART_SYNC_ACCEPT_MIN_WORD_RATIO,
+        smart_sync_accept_min_token_precision=cfg.SMART_SYNC_ACCEPT_MIN_TOKEN_PRECISION,
+        smart_sync_accept_min_asr_score=cfg.SMART_SYNC_ACCEPT_MIN_ASR_SCORE,
+        smart_sync_accept_max_asr_drop=cfg.SMART_SYNC_ACCEPT_MAX_ASR_DROP,
         threshold_compression=cfg.THRESHOLD_COMPRESSION,
         ratio_compression=cfg.RATIO_COMPRESSION,
         attack_compression=cfg.ATTACK_COMPRESSION,
@@ -292,7 +401,10 @@ def step_tts(paths: dict, suffix: str) -> None:
         tts_babble_guard_search_window_ms=cfg.TTS_BABBLE_GUARD_SEARCH_WINDOW_MS,
         tts_babble_guard_max_trim_ms=cfg.TTS_BABBLE_GUARD_MAX_TRIM_MS,
         tts_babble_guard_anchor_words=cfg.TTS_BABBLE_GUARD_ANCHOR_WORDS,
+        tts_babble_guard_min_score_gain=cfg.TTS_BABBLE_GUARD_MIN_SCORE_GAIN,
         enable_tts_asr_retry=cfg.ENABLE_TTS_ASR_RETRY,
+        tts_asr_retry_model_name=cfg.TTS_ASR_RETRY_MODEL_NAME,
+        tts_asr_retry_device=cfg.TTS_ASR_RETRY_DEVICE,
         tts_asr_retry_max_segment_sec=cfg.TTS_ASR_RETRY_MAX_SEGMENT_SEC,
         tts_asr_retry_attempts=cfg.TTS_ASR_RETRY_ATTEMPTS,
         tts_asr_retry_min_score=cfg.TTS_ASR_RETRY_MIN_SCORE,
@@ -305,6 +417,13 @@ def step_tts(paths: dict, suffix: str) -> None:
         segment_match_strength=cfg.SEGMENT_MATCH_STRENGTH,
         segment_match_max_delta_db=cfg.SEGMENT_MATCH_MAX_DELTA_DB,
         segment_match_min_active_ratio=cfg.SEGMENT_MATCH_MIN_ACTIVE_RATIO
+    )
+
+    with open(paths["translated_segments"], "w", encoding="utf-8") as f:
+        json.dump(tts_segments, f, ensure_ascii=False, indent=2)
+    logger.info(
+        "TTS-обновления сегментов сохранены: %s",
+        paths["translated_segments"]
     )
 
     del tts_backend
@@ -338,13 +457,42 @@ def step_postprocess(paths: dict, suffix: str) -> None:
     logger.info("╚══ Постобработка завершена ══╝")
 
 
+def step_subtitles(paths: dict, suffix: str) -> None:
+    from src.subtitles import add_subtitles_to_video
+
+    logger.info("╔══ ШАГ 6: СУБТИТРЫ ══╗")
+    check_file(paths["final_video"], "subtitles")
+    check_file(paths["translated_segments"], "subtitles")
+
+    with open(paths["translated_segments"], "r", encoding="utf-8") as f:
+        translated = json.load(f)
+
+    results = add_subtitles_to_video(
+        video_path=paths["final_video"],
+        segments=translated,
+        output_dir=paths["subtitles_dir"],
+        suffix=suffix,
+        mode=getattr(cfg, "SUBTITLE_MODE", "soft"),
+        use_original=getattr(cfg, "SUBTITLE_USE_ORIGINAL", False),
+        ass_font=getattr(cfg, "SUBTITLE_ASS_FONT", "Arial"),
+        ass_font_size=getattr(cfg, "SUBTITLE_ASS_FONT_SIZE", 24),
+    )
+
+    manifest_path = os.path.join(paths["subtitles_dir"], "subtitles_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+    logger.info("Субтитры сохранены: %s", paths["subtitles_dir"])
+    logger.info("╚══ Субтитры завершены ══╝")
+
+
 def step_metrics(paths: dict, suffix: str) -> None:
-    import whisper
+    from src.asr_backend import load_metrics_asr_model
     from src.metrics import (speaker_verification_score, compute_wer_cer,
                               compute_labse_similarity, print_metrics_summary,
                               plot_labse)
 
-    logger.info("╔══ ШАГ 6: МЕТРИКИ ══╗")
+    logger.info("╔══ ШАГ 7: МЕТРИКИ ══╗")
     check_file(paths["speaker_ref"],         "metrics")
     check_file(paths["final_voice"],         "metrics")
     check_file(paths["segments"],            "metrics")
@@ -357,7 +505,7 @@ def step_metrics(paths: dict, suffix: str) -> None:
 
     spk_score = speaker_verification_score(paths["speaker_ref"], paths["final_voice"])
 
-    model_asr = whisper.load_model(cfg.WHISPER_MODEL_NAME).to(cfg.DEVICE)
+    model_asr = load_metrics_asr_model()
     wer_cer   = compute_wer_cer(model_asr, paths["final_voice"], translated)
     del model_asr
     gc.collect(); clear_torch_cache()
@@ -381,6 +529,9 @@ def step_metrics(paths: dict, suffix: str) -> None:
         "runtime": {
             "device": cfg.DEVICE,
             "whisper_model": cfg.WHISPER_MODEL_NAME,
+            "metrics_asr_provider": cfg.METRICS_ASR_PROVIDER,
+            "metrics_whisper_model": cfg.METRICS_WHISPER_MODEL_NAME,
+            "metrics_asr_api_model": cfg.METRICS_ASR_API_MODEL if cfg.METRICS_ASR_PROVIDER == "groq" else None,
             "tts_backend": "xtts",
         },
         "metrics": {
@@ -405,7 +556,7 @@ def step_metrics(paths: dict, suffix: str) -> None:
 def step_prepare_finetune(paths: dict, suffix: str) -> None:
     from src.finetune import prepare_finetune_dataset
 
-    logger.info("╔══ ШАГ 7: ПОДГОТОВКА ДАТАСЕТА ДЛЯ FINETUNE ══╗")
+    logger.info("╔══ ШАГ 8: ПОДГОТОВКА ДАТАСЕТА ДЛЯ FINETUNE ══╗")
     check_file(paths["segments"], "prepare_finetune")
 
     source_candidates = [
@@ -459,11 +610,12 @@ STEPS = {
     "translate":   step_translate,
     "tts":         step_tts,
     "postprocess": step_postprocess,
+    "subtitles":   step_subtitles,
     "metrics":     step_metrics,
     "prepare_finetune": step_prepare_finetune,
 }
 
-ALL_STEPS = ["preprocess", "asr", "translate", "tts", "postprocess", "metrics"]
+ALL_STEPS = ["preprocess", "asr", "translate", "tts", "postprocess", "subtitles", "metrics"]
 
 
 # ─── Точка входа ─────────────────────────────────────────────────────────────
@@ -476,17 +628,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--step",
         choices=list(STEPS.keys()) + ["all"],
-        default="all",                          # ← запуск без аргументов = весь пайплайн
+        default="all",
         help=(
             "Шаг пайплайна (по умолчанию: all):\n"
-            "  preprocess  — извлечь аудио, Demucs, денойзинг\n"
-            "  asr         — транскрипция + сегментация\n"
-            "  translate   — перевод en→ru\n"
-            "  tts         — синтез речи + синхронизация\n"
-            "  postprocess — микширование + сборка видео\n"
-            "  metrics     — подсчёт метрик качества\n"
-            "  prepare_finetune — подготовка датасета для XTTS fine-tuning\n"
-            "  all         — весь пайплайн целиком"
+            "  preprocess  - извлечь аудио, Demucs, денойзинг\n"
+            "  asr         - транскрипция + сегментация\n"
+            "  translate   - перевод en->ru\n"
+            "  tts         - синтез речи + синхронизация\n"
+            "  postprocess - микширование + сборка видео\n"
+            "  subtitles   - генерация и встраивание субтитров\n"
+            "  metrics     - подсчёт метрик качества\n"
+            "  prepare_finetune - подготовка датасета для XTTS fine-tuning\n"
+            "  all         - весь пайплайн целиком"
         )
     )
     parser.add_argument(
@@ -520,6 +673,11 @@ if __name__ == "__main__":
         help="Тестовый режим: данные сохраняются в ./data/test/ (production не трогается)"
     )
     parser.add_argument(
+        "--check-env",
+        action="store_true",
+        help="Проверить зависимости, CLI и модельные файлы без запуска пайплайна"
+    )
+    parser.add_argument(
         "--mt-model",
         default=None,
         help=(
@@ -533,14 +691,30 @@ if __name__ == "__main__":
         default=None,
         help="Переопределить стратегию перевода для текущего запуска."
     )
+    parser.add_argument(
+        "--subtitle-mode",
+        choices=["soft", "hard", "both"],
+        default="soft",
+        help="Режим субтитров для шага subtitles/all (по умолчанию: soft)."
+    )
+    parser.add_argument(
+        "--subtitle-original",
+        action="store_true",
+        help="Генерировать субтитры из original_text вместо перевода."
+    )
     args = parser.parse_args()
-
-    seed_everything(cfg.SEED)
 
     if args.mt_model:
         cfg.MT_MODEL_NAME = args.mt_model
     if args.mt_strategy:
         cfg.MT_STRATEGY = args.mt_strategy
+    cfg.SUBTITLE_MODE = args.subtitle_mode
+    cfg.SUBTITLE_USE_ORIGINAL = args.subtitle_original
+
+    if args.check_env:
+        sys.exit(0 if check_environment() else 1)
+
+    seed_everything(cfg.SEED)
 
     try:
         input_video = resolve_input_video(

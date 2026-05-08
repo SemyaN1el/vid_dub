@@ -12,6 +12,7 @@ from pydub import AudioSegment
 from pydub.effects import compress_dynamic_range, speedup
 from pydub.silence import detect_nonsilent
 from tqdm.auto import tqdm
+from src.translation import load_smart_sync_backend, smart_sync_rewrite_segment_text
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,116 @@ def _starts_with_lowercase_letter(text: str) -> bool:
         if char.isalpha():
             return char.islower()
     return False
+
+
+def _preferred_terminal_punctuation(text: str) -> str:
+    stripped = _strip_trailing_closers(text)
+    if stripped.endswith("?"):
+        return "?"
+    if stripped.endswith("!"):
+        return "!"
+    return "."
+
+
+def _replace_terminal_suffix(text: str, suffix: str) -> str:
+    base = _clean_text(text).rstrip(" .,!?:;_-")
+    if not base:
+        return _clean_text(text)
+    return f"{base}{suffix}"
+
+
+def _stabilize_tts_text(
+    text: str,
+    *,
+    original_text: str = "",
+    next_text: str = "",
+    gap_after_sec: float | None = None,
+    pause_after_sec: float | None = None,
+    tts_group_size: int = 1,
+    force_terminal: bool = False,
+) -> str:
+    cleaned = _clean_text(text)
+    if not cleaned or tts_group_size != 1:
+        return cleaned
+    if _ends_with_terminal_punctuation(cleaned):
+        return cleaned
+    if next_text and _starts_with_lowercase_letter(next_text):
+        return cleaned
+
+    should_add_terminal = force_terminal
+    if not should_add_terminal:
+        if original_text and _ends_with_terminal_punctuation(original_text):
+            should_add_terminal = True
+        elif pause_after_sec is not None and pause_after_sec >= 0.28:
+            should_add_terminal = True
+        elif gap_after_sec is not None and gap_after_sec >= 0.48:
+            should_add_terminal = True
+        elif (
+            next_text.strip()
+            and not _starts_with_lowercase_letter(next_text)
+            and len(cleaned) >= 48
+            and not _ends_with_continuation_punctuation(cleaned)
+        ):
+            should_add_terminal = True
+
+    if not should_add_terminal:
+        return cleaned
+
+    terminal = _preferred_terminal_punctuation(original_text or cleaned)
+    base = cleaned.rstrip(" ,;:-")
+    return f"{base}{terminal}" if base else cleaned
+
+
+def _build_tts_retry_text_variants(
+    text: str,
+    *,
+    original_text: str = "",
+    next_text: str = "",
+    gap_after_sec: float | None = None,
+    pause_after_sec: float | None = None,
+    tts_group_size: int = 1,
+    tts_backend_name: str = "",
+) -> List[str]:
+    variants: List[str] = []
+    base_clean = _clean_text(text)
+    if base_clean:
+        variants.append(base_clean)
+
+    backend_name = (tts_backend_name or "").strip().lower()
+    if backend_name != "xtts":
+        return variants
+
+    stabilized = _stabilize_tts_text(
+        text,
+        original_text=original_text,
+        next_text=next_text,
+        gap_after_sec=gap_after_sec,
+        pause_after_sec=pause_after_sec,
+        tts_group_size=tts_group_size,
+        force_terminal=False,
+    )
+    boundary_detected = (
+        stabilized != base_clean
+        or _ends_with_terminal_punctuation(base_clean)
+        or _ends_with_terminal_punctuation(original_text)
+    )
+    if not boundary_detected:
+        return variants
+
+    preferred = _preferred_terminal_punctuation(original_text or base_clean)
+    suffix_candidates: List[str]
+    if preferred == "?":
+        suffix_candidates = ["?", "!", "_"]
+    elif preferred == "!":
+        suffix_candidates = ["!", "?", "_"]
+    else:
+        suffix_candidates = ["!", "?", "_"]
+
+    for suffix in suffix_candidates:
+        candidate = _replace_terminal_suffix(base_clean, suffix)
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+    return variants
 
 
 def _join_segment_text(left: str, right: str) -> str:
@@ -415,6 +526,64 @@ def _edge_silence_ms(
     return {"leading": leading_ms, "trailing": trailing_ms}
 
 
+def _timing_speech_stats(
+    audio: AudioSegment,
+    keep_edge_ms: int = 60,
+) -> Dict[str, int]:
+    """
+    Оценивает «реальную» речевую длительность для тайминга, не наказывая
+    сегмент за длинные стартовые/хвостовые паузы XTTS.
+    """
+    if len(audio) == 0:
+        return {
+            "effective_duration_ms": 0,
+            "leading_silence_ms": 0,
+            "trailing_silence_ms": 0,
+        }
+
+    edge = _edge_silence_ms(audio)
+    effective_duration_ms = max(
+        0,
+        len(audio)
+        - max(0, edge["leading"] - keep_edge_ms)
+        - max(0, edge["trailing"] - keep_edge_ms)
+    )
+    return {
+        "effective_duration_ms": int(effective_duration_ms),
+        "leading_silence_ms": int(edge["leading"]),
+        "trailing_silence_ms": int(edge["trailing"]),
+    }
+
+
+def _allocate_timing_extension_ms(
+    needed_extension_ms: int,
+    available_before_ms: int,
+    available_after_ms: int,
+) -> Tuple[int, int]:
+    """Распределяет дополнительное окно слева/справа максимально симметрично."""
+    if needed_extension_ms <= 0:
+        return 0, 0
+
+    total_available_ms = max(0, available_before_ms) + max(0, available_after_ms)
+    if total_available_ms <= 0:
+        return 0, 0
+
+    target_extension_ms = min(needed_extension_ms, total_available_ms)
+    half_needed_ms = target_extension_ms / 2.0
+
+    if half_needed_ms <= available_before_ms and half_needed_ms <= available_after_ms:
+        return int(round(half_needed_ms)), int(round(half_needed_ms))
+
+    if available_before_ms < half_needed_ms:
+        borrow_before_ms = max(0, available_before_ms)
+        borrow_after_ms = min(target_extension_ms - borrow_before_ms, max(0, available_after_ms))
+        return int(round(borrow_before_ms)), int(round(borrow_after_ms))
+
+    borrow_after_ms = max(0, available_after_ms)
+    borrow_before_ms = min(target_extension_ms - borrow_after_ms, max(0, available_before_ms))
+    return int(round(borrow_before_ms)), int(round(borrow_after_ms))
+
+
 def _compute_safe_tail_trim_ms(
     original_ms: int,
     corrected_ms: int,
@@ -457,6 +626,123 @@ def _normalized_text_similarity(expected_text: str, recognized_text: str) -> flo
     if not expected_norm or not recognized_norm:
         return 0.0
     return SequenceMatcher(None, expected_norm, recognized_norm).ratio()
+
+
+def _token_overlap_stats(
+    expected_words: List[str],
+    recognized_words: List[str],
+) -> Tuple[int, float, float]:
+    if not expected_words or not recognized_words:
+        return 0, 0.0, 0.0
+
+    expected_counts: Dict[str, int] = {}
+    recognized_counts: Dict[str, int] = {}
+    for word in expected_words:
+        expected_counts[word] = expected_counts.get(word, 0) + 1
+    for word in recognized_words:
+        recognized_counts[word] = recognized_counts.get(word, 0) + 1
+
+    overlap = 0
+    for word, expected_count in expected_counts.items():
+        overlap += min(expected_count, recognized_counts.get(word, 0))
+
+    recall = overlap / max(1, len(expected_words))
+    precision = overlap / max(1, len(recognized_words))
+    return overlap, recall, precision
+
+
+def _smart_sync_distance_ms(duration_ms: int, target_ms: int, mode: str) -> int:
+    if mode == "shorter":
+        return max(0, duration_ms - target_ms)
+    return abs(duration_ms - target_ms)
+
+
+def _smart_sync_acceptance_gate(
+    *,
+    source_text: str,
+    rewritten_text: str,
+    rewrite_mode: str,
+    baseline_duration_ms: int,
+    rewritten_duration_ms: int,
+    target_duration_ms: int,
+    baseline_eval: Dict[str, Any] | None,
+    rewritten_eval: Dict[str, Any] | None,
+    min_fill_ratio: float,
+    min_text_similarity: float,
+    min_word_ratio: float,
+    min_token_precision: float,
+    min_asr_score: float,
+    max_asr_drop: float,
+) -> tuple[bool, Dict[str, Any]]:
+    source_words = _normalize_word_tokens(source_text)
+    rewritten_words = _normalize_word_tokens(rewritten_text)
+    text_similarity = _normalized_text_similarity(source_text, rewritten_text)
+    _, _, token_precision = _token_overlap_stats(source_words, rewritten_words)
+    word_ratio = len(rewritten_words) / max(1, len(source_words))
+    fill_ratio = rewritten_duration_ms / max(1, target_duration_ms)
+    duration_ratio = rewritten_duration_ms / max(1, baseline_duration_ms)
+
+    baseline_score = None
+    if baseline_eval is not None:
+        baseline_score = float(baseline_eval.get("score") or 0.0)
+    rewritten_score = None
+    if rewritten_eval is not None:
+        rewritten_score = float(rewritten_eval.get("score") or 0.0)
+    baseline_has_extra_tail = bool(baseline_eval.get("has_extra_tail")) if baseline_eval is not None else None
+    rewritten_has_extra_tail = bool(rewritten_eval.get("has_extra_tail")) if rewritten_eval is not None else None
+    rewritten_has_suffix = bool(rewritten_eval.get("has_suffix")) if rewritten_eval is not None else None
+
+    metrics = {
+        "text_similarity": round(text_similarity, 4),
+        "token_precision": round(token_precision, 4),
+        "word_ratio": round(word_ratio, 4),
+        "fill_ratio": round(fill_ratio, 4),
+        "duration_ratio": round(duration_ratio, 4),
+        "baseline_asr_score": round(baseline_score, 4) if baseline_score is not None else None,
+        "rewritten_asr_score": round(rewritten_score, 4) if rewritten_score is not None else None,
+        "baseline_has_extra_tail": baseline_has_extra_tail,
+        "rewritten_has_extra_tail": rewritten_has_extra_tail,
+        "rewritten_has_suffix": rewritten_has_suffix,
+    }
+
+    if rewrite_mode == "shorter":
+        if fill_ratio < min_fill_ratio:
+            metrics["reject_reason"] = "underfill"
+            return False, metrics
+        if len(source_words) >= 5 and word_ratio < min_word_ratio:
+            metrics["reject_reason"] = "word_ratio"
+            return False, metrics
+        if len(source_words) >= 4 and text_similarity < min_text_similarity:
+            metrics["reject_reason"] = "text_similarity"
+            return False, metrics
+        if len(source_words) >= 4 and token_precision < min_token_precision:
+            metrics["reject_reason"] = "token_precision"
+            return False, metrics
+
+    if rewritten_score is not None:
+        if rewritten_has_extra_tail:
+            metrics["reject_reason"] = "extra_tail"
+            return False, metrics
+        if rewritten_has_suffix is False:
+            metrics["reject_reason"] = "missing_suffix"
+            return False, metrics
+        if rewritten_score < min_asr_score:
+            metrics["reject_reason"] = "asr_score"
+            return False, metrics
+        if baseline_score is not None and rewritten_score < (baseline_score - max_asr_drop):
+            metrics["reject_reason"] = "asr_drop"
+            return False, metrics
+        if rewrite_mode == "shorter" and baseline_score is not None:
+            if baseline_score >= min_asr_score and rewritten_score < baseline_score:
+                metrics["reject_reason"] = "asr_not_better"
+                return False, metrics
+        if rewrite_mode == "longer" and baseline_score is not None:
+            if rewritten_score + 0.01 < baseline_score:
+                metrics["reject_reason"] = "asr_not_preserved"
+                return False, metrics
+
+    metrics["reject_reason"] = None
+    return True, metrics
 
 
 def _contains_expected_suffix(
@@ -520,6 +806,28 @@ def _segment_recognition_score(
         "has_suffix": has_suffix,
         "score": score,
     }
+
+
+def _recognition_eval_rank(eval_result: Dict[str, Any] | None) -> tuple[int, int, float, float]:
+    if not eval_result:
+        return (0, 0, 0.0, 0.0)
+    return (
+        0 if eval_result.get("has_extra_tail") else 1,
+        1 if eval_result.get("has_suffix", False) else 0,
+        float(eval_result.get("score") or 0.0),
+        float(eval_result.get("similarity") or 0.0),
+    )
+
+
+def _is_better_recognition_eval(
+    candidate_eval: Dict[str, Any] | None,
+    incumbent_eval: Dict[str, Any] | None,
+) -> bool:
+    if candidate_eval is None:
+        return False
+    if incumbent_eval is None:
+        return True
+    return _recognition_eval_rank(candidate_eval) > _recognition_eval_rank(incumbent_eval)
 
 
 def _find_trailing_speech_island_trim_ms(
@@ -647,7 +955,8 @@ def _trim_trailing_babble(
     max_island_ms: int,
     search_window_ms: int,
     max_trim_ms: int,
-    anchor_words: int
+    anchor_words: int,
+    min_score_gain: float = 0.08,
 ) -> tuple[AudioSegment, Dict[str, Any] | None]:
     if model_asr is None or len(audio) == 0:
         return audio, None
@@ -656,7 +965,7 @@ def _trim_trailing_babble(
     if not _ends_with_terminal_punctuation(expected_text):
         return audio, None
 
-    trim_ms = _find_trailing_speech_island_trim_ms(
+    detected_trim_ms = _find_trailing_speech_island_trim_ms(
         audio=audio,
         min_gap_ms=min_gap_ms,
         min_island_ms=min_island_ms,
@@ -664,24 +973,56 @@ def _trim_trailing_babble(
         search_window_ms=search_window_ms,
         max_trim_ms=max_trim_ms
     )
-    if trim_ms <= 0:
-        return audio, None
 
     recognized_before = _transcribe_short_audio(model_asr, audio, language)
-    if not _has_extra_trailing_words(expected_text, recognized_before, anchor_words):
+    score_before = _segment_recognition_score(
+        expected_text,
+        recognized_before,
+        anchor_words
+    )
+
+    baseline_suspicious = (
+        detected_trim_ms > 0
+        or score_before["has_extra_tail"]
+        or not score_before["has_suffix"]
+    )
+    if not baseline_suspicious:
         return audio, None
 
-    trimmed_audio = audio[:-trim_ms]
-    recognized_after = _transcribe_short_audio(model_asr, trimmed_audio, language)
-    if _has_extra_trailing_words(expected_text, recognized_after, anchor_words):
+    if detected_trim_ms <= 0 or detected_trim_ms >= len(audio):
         return audio, None
-    if not _contains_expected_suffix(expected_text, recognized_after, anchor_words):
+
+    trimmed_audio = audio[:-detected_trim_ms]
+    recognized_after = _transcribe_short_audio(model_asr, trimmed_audio, language)
+    score_after = _segment_recognition_score(
+        expected_text,
+        recognized_after,
+        anchor_words
+    )
+    if score_after["has_extra_tail"]:
+        return audio, None
+    if not score_after["has_suffix"]:
+        return audio, None
+
+    improved = (
+        score_after["score"] >= score_before["score"] + min_score_gain
+        and score_after["similarity"] >= score_before["similarity"]
+    )
+    if score_before["has_extra_tail"]:
+        improved = (
+            score_after["score"] >= score_before["score"] + (min_score_gain * 0.5)
+            and score_after["similarity"] + 0.02 >= score_before["similarity"]
+        )
+    if not improved:
         return audio, None
 
     info = {
-        "trim_ms": trim_ms,
+        "trim_ms": detected_trim_ms,
         "recognized_before": recognized_before,
         "recognized_after": recognized_after,
+        "score_before": round(score_before["score"], 4),
+        "score_after": round(score_after["score"], 4),
+        "reason": "extra_tail" if score_before["has_extra_tail"] else "score_gain",
     }
     return trimmed_audio, info
 
@@ -919,6 +1260,7 @@ def generate_audio_segment(
     language: str,
     conditioning=None,
     speaker_profile: Dict[str, Any] | None = None,
+    inference_overrides: Dict[str, Any] | None = None,
 ) -> Tuple[str, float]:
     """
     Синтезирует аудио для одного текстового сегмента.
@@ -948,7 +1290,8 @@ def generate_audio_segment(
     wav, sample_rate = tts_backend.synthesize(
         text=text,
         language=language,
-        conditioning=conditioning
+        conditioning=conditioning,
+        inference_overrides=inference_overrides,
     )
     sf.write(output_path, wav, sample_rate)
 
@@ -956,6 +1299,19 @@ def generate_audio_segment(
 
     duration = len(audio) / 1000.0
     return output_path, duration
+
+
+def _serialize_tts_segments(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Возвращает TTS metadata без runtime-only audio objects."""
+    serializable: List[Dict[str, Any]] = []
+    for segment in segments:
+        item = {
+            key: value
+            for key, value in segment.items()
+            if key != "corrected_audio"
+        }
+        serializable.append(item)
+    return serializable
 
 
 def synthesize_segments_with_timing(
@@ -975,6 +1331,21 @@ def synthesize_segments_with_timing(
     fade_in_out_ms: int = 50,
     crossfade_ms: int = 30,
     max_shift_left_seconds: float = 0.5,
+    enable_smart_sync: bool = False,
+    smart_sync_device: str = "cpu",
+    smart_sync_src_lang: str = "eng_Latn",
+    smart_sync_tgt_lang: str = "rus_Cyrl",
+    smart_sync_max_rewrites: int = 1,
+    smart_sync_trigger_speed_factor: float = 1.08,
+    smart_sync_min_fill_ratio: float = 0.82,
+    smart_sync_min_improvement_ms: int = 180,
+    smart_sync_allow_lengthen: bool = True,
+    smart_sync_accept_min_fill_ratio: float = 0.72,
+    smart_sync_accept_min_text_similarity: float = 0.42,
+    smart_sync_accept_min_word_ratio: float = 0.58,
+    smart_sync_accept_min_token_precision: float = 0.62,
+    smart_sync_accept_min_asr_score: float = 0.86,
+    smart_sync_accept_max_asr_drop: float = 0.05,
     threshold_compression: float = -15.0,
     ratio_compression: float = 2.0,
     attack_compression: int = 25,
@@ -1014,7 +1385,10 @@ def synthesize_segments_with_timing(
     tts_babble_guard_search_window_ms: int = 900,
     tts_babble_guard_max_trim_ms: int = 700,
     tts_babble_guard_anchor_words: int = 2,
+    tts_babble_guard_min_score_gain: float = 0.08,
     enable_tts_asr_retry: bool = False,
+    tts_asr_retry_model_name: str = "tiny",
+    tts_asr_retry_device: str = "cpu",
     tts_asr_retry_max_segment_sec: float = 2.5,
     tts_asr_retry_attempts: int = 4,
     tts_asr_retry_min_score: float = 0.9,
@@ -1027,7 +1401,7 @@ def synthesize_segments_with_timing(
     segment_match_strength: float = 0.7,
     segment_match_max_delta_db: float = 4.0,
     segment_match_min_active_ratio: float = 0.35
-) -> None:
+) -> List[Dict[str, Any]]:
     """
     Синтезирует дубляж с временно́й синхронизацией сегментов.
 
@@ -1058,10 +1432,15 @@ def synthesize_segments_with_timing(
             len(segments)
         )
 
+    whisper = None
     babble_guard_model = None
-    if enable_tts_babble_guard:
-        import whisper
+    asr_eval_model = None
+    if enable_tts_babble_guard or enable_tts_asr_retry or enable_smart_sync:
+        import whisper as whisper_module
 
+        whisper = whisper_module
+
+    if enable_tts_babble_guard and whisper is not None:
         logger.info(
             "Загружаем Whisper %s для TTS babble guard на %s...",
             tts_babble_guard_model_name,
@@ -1070,6 +1449,47 @@ def synthesize_segments_with_timing(
         babble_guard_model = whisper.load_model(tts_babble_guard_model_name).to(
             tts_babble_guard_device
         )
+
+    if (enable_tts_asr_retry or enable_smart_sync) and whisper is not None:
+        if (
+            babble_guard_model is not None
+            and tts_asr_retry_model_name == tts_babble_guard_model_name
+            and tts_asr_retry_device == tts_babble_guard_device
+        ):
+            asr_eval_model = babble_guard_model
+            logger.info(
+                "TTS ASR-eval будет использовать уже загруженный Whisper %s на %s.",
+                tts_asr_retry_model_name,
+                tts_asr_retry_device
+            )
+        else:
+            logger.info(
+                "Загружаем Whisper %s для TTS ASR-eval на %s...",
+                tts_asr_retry_model_name,
+                tts_asr_retry_device
+            )
+            asr_eval_model = whisper.load_model(tts_asr_retry_model_name).to(
+                tts_asr_retry_device
+            )
+
+    tail_guard_asr_model = babble_guard_model or asr_eval_model
+    if tail_guard_asr_model is not None and babble_guard_model is None and asr_eval_model is not None:
+        logger.info(
+            "TTS tail guard будет использовать уже загруженный Whisper %s без отдельной модели.",
+            tts_asr_retry_model_name
+        )
+
+    smart_sync_backend = None
+    if enable_smart_sync and smart_sync_max_rewrites > 0:
+        try:
+            smart_sync_backend = load_smart_sync_backend(device=smart_sync_device)
+            if smart_sync_backend is not None:
+                logger.info(
+                    "SmartSync rewrite активирован через %s",
+                    getattr(smart_sync_backend, "model_name", "smart-sync")
+                )
+        except Exception as error:
+            logger.warning("SmartSync rewrite отключён по fallback: %s", error)
 
     if isinstance(speaker_wav, list):
         default_reference_paths = [path for path in speaker_wav if path and os.path.exists(path)]
@@ -1134,29 +1554,35 @@ def synthesize_segments_with_timing(
     prev_end_sec = 0.0
 
     for i, seg in tqdm(enumerate(segments), total=len(segments), desc="Синтез"):
-        orig_start  = seg["original_start"]
-        orig_end    = seg["original_end"]
-        cur_start   = seg["start"]
+        orig_start  = float(seg["original_start"])
+        orig_end    = float(seg["original_end"])
+        cur_start   = float(seg.get("start", orig_start))
         cur_start_ms = int(cur_start * 1000)
-
-        # Сдвиг первого сегмента влево при наличии свободного времени
-        if i == 0:
-            avail_shift = min(max(0.0, orig_start - prev_end_sec), max_shift_left_seconds)
-            if avail_shift > 0.05:
-                seg["start"] -= avail_shift
-                seg["start"]  = max(orig_start - max_shift_left_seconds, seg["start"])
-                cur_start     = seg["start"]
-                cur_start_ms  = int(cur_start * 1000)
-
-        # Защита от слишком раннего сдвига
-        if cur_start - orig_start < -max_shift_left_seconds:
-            seg["start"] = orig_start
-            cur_start    = orig_start
-            cur_start_ms = int(orig_start * 1000)
+        next_segment_hint = segments[i + 1] if i < len(segments) - 1 else None
+        next_text_hint = str(next_segment_hint.get("text") or "") if next_segment_hint else ""
+        next_start_hint = None
+        gap_after_hint_sec = None
+        if next_segment_hint is not None:
+            next_start_hint = float(
+                next_segment_hint.get(
+                    "start",
+                    next_segment_hint.get("original_start", orig_end)
+                )
+            )
+            gap_after_hint_sec = max(0.0, next_start_hint - orig_end)
+        pause_after_hint = seg.get("pause_after_sec")
+        if pause_after_hint is not None:
+            try:
+                pause_after_hint = float(pause_after_hint)
+            except (TypeError, ValueError):
+                pause_after_hint = None
+        tts_group_size = int(seg.get("tts_group_size", 1) or 1)
 
         # Очистка текста
-        clean = _clean_text(seg["text"])
+        original_clean = _clean_text(seg["text"])
+        clean = original_clean
         seg["cleaned_text"] = clean
+        seg["tts_text_was_stabilized"] = False
         if not clean:
             logger.warning(f"[{i}] Пустой сегмент после очистки — пропуск.")
             continue
@@ -1204,22 +1630,330 @@ def synthesize_segments_with_timing(
         seg_audio       = AudioSegment.from_wav(seg_path)
         generated_ms    = len(seg_audio)
 
-        orig_start_val = seg["start"]
-        orig_end_val   = seg.get("end", seg["start"] + 1.0)
-        if orig_start_val > orig_end_val:
-            orig_start_val, orig_end_val = orig_end_val, orig_start_val
+        window_start_val = float(seg.get("start", orig_start))
+        window_end_val   = float(seg.get("end", window_start_val + 1.0))
+        if window_start_val > window_end_val:
+            window_start_val, window_end_val = window_end_val, window_start_val
 
-        original_ms = int((orig_end_val - orig_start_val) * 1000)
+        original_ms = int((window_end_val - window_start_val) * 1000)
+        timing_stats = _timing_speech_stats(seg_audio)
+        timing_duration_ms = max(1, timing_stats["effective_duration_ms"] or generated_ms)
+        seg["timing_effective_duration_ms"] = timing_duration_ms
+        seg["timing_leading_silence_ms"] = timing_stats["leading_silence_ms"]
+        seg["timing_trailing_silence_ms"] = timing_stats["trailing_silence_ms"]
 
-        # Доступное время с учётом паузы до следующего сегмента
+        available_before_ms = max(
+            0,
+            int(
+                (
+                    window_start_val
+                    - (prev_end_sec + min_pause_between_segments)
+                ) * 1000
+            )
+        )
+        available_before_ms = min(
+            available_before_ms,
+            max(0, int(max_shift_left_seconds * 1000))
+        )
+
+        available_after_ms = 0
         if i < len(segments) - 1:
-            next_start_ms   = int(segments[i + 1]["start"] * 1000)
-            before_next_ms  = max(0, next_start_ms - int(orig_end_val * 1000))
-        else:
-            before_next_ms = 0
+            next_segment = segments[i + 1]
+            next_current_start = float(next_segment.get("start", next_segment.get("original_start", 0.0)))
+            gap_after_ms = max(
+                0,
+                int(
+                    (
+                        next_current_start
+                        - window_end_val
+                        - min_pause_between_segments
+                    ) * 1000
+                )
+            )
+            available_after_ms = gap_after_ms
+            if max_next_start_shift_sec is not None:
+                next_original_start = float(
+                    next_segment.setdefault("original_start", next_segment.get("start", next_current_start))
+                )
+                max_allowed_next_start = next_original_start + max_next_start_shift_sec
+                available_after_ms += max(
+                    0,
+                    int((max_allowed_next_start - next_current_start) * 1000)
+                )
 
-        extra_ms      = max(0, before_next_ms - int(min_pause_between_segments * 1000))
-        available_ms  = max(100, original_ms + extra_ms)
+        borrowed_before_ms = 0
+        borrowed_after_ms = 0
+        needed_extension_ms = max(0, timing_duration_ms - original_ms)
+        total_borrowable_ms = available_before_ms + available_after_ms
+        if (
+            needed_extension_ms > 0
+            and total_borrowable_ms >= max(120, int(needed_extension_ms * 0.5))
+        ):
+            borrowed_before_ms, borrowed_after_ms = _allocate_timing_extension_ms(
+                needed_extension_ms=needed_extension_ms,
+                available_before_ms=available_before_ms,
+                available_after_ms=available_after_ms,
+            )
+            if borrowed_before_ms or borrowed_after_ms:
+                cur_start = max(
+                    prev_end_sec + min_pause_between_segments,
+                    window_start_val - borrowed_before_ms / 1000.0,
+                )
+                cur_start_ms = int(round(cur_start * 1000))
+
+        seg["start"] = cur_start
+        seg["timing_borrow_before_ms"] = borrowed_before_ms
+        seg["timing_borrow_after_ms"] = borrowed_after_ms
+        seg["timing_window_start_sec"] = round(cur_start, 3)
+        seg["timing_window_end_sec"] = round(
+            window_end_val + borrowed_after_ms / 1000.0,
+            3
+        )
+        seg["timing_window_ms"] = available_ms = max(100, original_ms + borrowed_before_ms + borrowed_after_ms)
+
+        if borrowed_before_ms or borrowed_after_ms:
+            logger.info(
+                "[%s] Timing borrow: -%s мс / +%s мс -> окно %.2fs",
+                i,
+                borrowed_before_ms,
+                borrowed_after_ms,
+                available_ms / 1000.0
+            )
+        target_sync_ms = original_ms
+
+        if (
+            smart_sync_backend is not None
+            and enable_smart_sync
+            and clean
+            and smart_sync_max_rewrites > 0
+        ):
+            rewrite_mode = None
+            if (
+                timing_duration_ms > available_ms
+                and (
+                    timing_duration_ms >= available_ms + smart_sync_min_improvement_ms
+                    or (timing_duration_ms / max(available_ms, 1)) >= smart_sync_trigger_speed_factor
+                )
+            ):
+                rewrite_mode = "shorter"
+                target_sync_ms = available_ms
+            elif (
+                smart_sync_allow_lengthen
+                and original_ms > 0
+                and timing_duration_ms <= max(1, int(original_ms * smart_sync_min_fill_ratio))
+                and (original_ms - timing_duration_ms) >= smart_sync_min_improvement_ms
+            ):
+                rewrite_mode = "longer"
+                target_sync_ms = original_ms
+
+            if rewrite_mode:
+                best_audio = seg_audio
+                best_text = clean
+                best_timing_duration_ms = timing_duration_ms
+                best_distance = _smart_sync_distance_ms(best_timing_duration_ms, target_sync_ms, rewrite_mode)
+                initial_smart_sync_duration_ms = len(seg_audio)
+                initial_smart_sync_timing_ms = best_timing_duration_ms
+                accepted_rewrite = None
+                baseline_smart_sync_eval = None
+
+                context_pause_threshold_sec = max(0.5, min_pause_between_segments)
+                previous_context_text = ""
+                if i > 0:
+                    prev_seg = segments[i - 1]
+                    prev_gap_sec = max(
+                        0.0,
+                        window_start_val - float(prev_seg.get("end", prev_seg.get("start", 0.0)))
+                    )
+                    if prev_gap_sec <= context_pause_threshold_sec and _same_speaker(prev_seg, seg):
+                        previous_context_text = str(
+                            prev_seg.get("cleaned_text") or prev_seg.get("text") or ""
+                        ).strip()
+
+                next_context_text = ""
+                if i < len(segments) - 1:
+                    next_seg = segments[i + 1]
+                    next_gap_sec = max(
+                        0.0,
+                        float(next_seg.get("start", next_seg.get("original_start", next_seg.get("start", 0.0))))
+                        - window_end_val
+                    )
+                    if next_gap_sec <= context_pause_threshold_sec and _same_speaker(seg, next_seg):
+                        next_context_text = str(
+                            next_seg.get("text") or next_seg.get("cleaned_text") or ""
+                        ).strip()
+
+                if asr_eval_model is not None:
+                    try:
+                        baseline_recognized = _transcribe_short_audio(
+                            asr_eval_model,
+                            seg_audio,
+                            language
+                        )
+                        baseline_smart_sync_eval = _segment_recognition_score(
+                            clean,
+                            baseline_recognized,
+                            tts_babble_guard_anchor_words
+                        )
+                    except Exception as error:
+                        logger.debug(
+                            "[%s] SmartSync baseline ASR check skipped: %s",
+                            i,
+                            error
+                        )
+
+                for rewrite_idx in range(smart_sync_max_rewrites):
+                    try:
+                        rewritten_text, rewrite_info = smart_sync_rewrite_segment_text(
+                            segment=seg,
+                            backend=smart_sync_backend,
+                            src_lang=smart_sync_src_lang,
+                            tgt_lang=smart_sync_tgt_lang,
+                            current_duration_sec=best_timing_duration_ms / 1000.0,
+                            target_duration_sec=target_sync_ms / 1000.0,
+                            available_duration_sec=available_ms / 1000.0,
+                            rewrite_mode=rewrite_mode,
+                            previous_text=previous_context_text,
+                            next_text=next_context_text,
+                        )
+                    except Exception as error:
+                        logger.warning(
+                            "[%s] SmartSync rewrite недоступен, fallback на обычный TTS: %s",
+                            i,
+                            error
+                        )
+                        smart_sync_backend = None
+                        break
+
+                    if not rewritten_text:
+                        break
+
+                    rewritten_clean = _clean_text(rewritten_text)
+                    if not rewritten_clean or rewritten_clean == best_text:
+                        break
+
+                    with NamedTemporaryFile(suffix=".wav", delete=False) as rewrite_tmp:
+                        rewrite_path = rewrite_tmp.name
+                    try:
+                        generate_audio_segment(
+                            tts_backend=tts_backend,
+                            text=rewritten_clean,
+                            output_path=rewrite_path,
+                            speaker_wav=selected_references,
+                            language=language,
+                            conditioning=conditioning,
+                            speaker_profile=speaker_profile
+                        )
+                        rewritten_audio = AudioSegment.from_wav(rewrite_path)
+                    finally:
+                        if os.path.exists(rewrite_path):
+                            try:
+                                os.remove(rewrite_path)
+                            except OSError:
+                                pass
+
+                    rewritten_eval = None
+                    if asr_eval_model is not None:
+                        try:
+                            rewritten_recognized = _transcribe_short_audio(
+                                asr_eval_model,
+                                rewritten_audio,
+                                language
+                            )
+                            rewritten_eval = _segment_recognition_score(
+                                rewritten_clean,
+                                rewritten_recognized,
+                                tts_babble_guard_anchor_words
+                            )
+                        except Exception as error:
+                            logger.debug(
+                                "[%s] SmartSync rewritten ASR check skipped: %s",
+                                i,
+                                error
+                            )
+
+                    rewritten_timing_duration_ms = max(
+                        1,
+                        _timing_speech_stats(rewritten_audio)["effective_duration_ms"] or len(rewritten_audio)
+                    )
+                    new_distance = _smart_sync_distance_ms(
+                        rewritten_timing_duration_ms,
+                        target_sync_ms,
+                        rewrite_mode
+                    )
+                    boundary_hit = (
+                        rewrite_mode == "shorter"
+                        and rewritten_timing_duration_ms <= available_ms < best_timing_duration_ms
+                    )
+                    improved_enough = new_distance <= max(0, best_distance - smart_sync_min_improvement_ms)
+                    accepted_by_gate, gate_metrics = _smart_sync_acceptance_gate(
+                        source_text=clean,
+                        rewritten_text=rewritten_clean,
+                        rewrite_mode=rewrite_mode,
+                        baseline_duration_ms=best_timing_duration_ms,
+                        rewritten_duration_ms=rewritten_timing_duration_ms,
+                        target_duration_ms=target_sync_ms,
+                        baseline_eval=baseline_smart_sync_eval,
+                        rewritten_eval=rewritten_eval,
+                        min_fill_ratio=smart_sync_accept_min_fill_ratio,
+                        min_text_similarity=smart_sync_accept_min_text_similarity,
+                        min_word_ratio=smart_sync_accept_min_word_ratio,
+                        min_token_precision=smart_sync_accept_min_token_precision,
+                        min_asr_score=smart_sync_accept_min_asr_score,
+                        max_asr_drop=smart_sync_accept_max_asr_drop,
+                    )
+
+                    if accepted_by_gate and (boundary_hit or improved_enough):
+                        best_audio = rewritten_audio
+                        best_text = rewritten_clean
+                        best_timing_duration_ms = rewritten_timing_duration_ms
+                        best_distance = new_distance
+                        accepted_rewrite = rewrite_info or {}
+                        accepted_rewrite["attempt"] = rewrite_idx + 1
+                        accepted_rewrite["accepted_duration_sec"] = round(len(rewritten_audio) / 1000.0, 3)
+                        accepted_rewrite["accepted_timing_duration_sec"] = round(
+                            rewritten_timing_duration_ms / 1000.0,
+                            3
+                        )
+                        accepted_rewrite["gate_metrics"] = gate_metrics
+                        break
+
+                    logger.info(
+                        "[%s] SmartSync candidate rejected (%s): fill=%.2f sim=%.2f word_ratio=%.2f precision=%.2f asr=%s",
+                        i,
+                        gate_metrics.get("reject_reason") or "timing",
+                        gate_metrics.get("fill_ratio", 0.0),
+                        gate_metrics.get("text_similarity", 0.0),
+                        gate_metrics.get("word_ratio", 0.0),
+                        gate_metrics.get("token_precision", 0.0),
+                        gate_metrics.get("rewritten_asr_score"),
+                    )
+
+                if accepted_rewrite is not None:
+                    seg_audio = best_audio
+                    generated_ms = len(seg_audio)
+                    timing_duration_ms = best_timing_duration_ms
+                    seg_audio.export(seg_path, format="wav")
+                    seg["smart_sync"] = accepted_rewrite
+                    seg["smart_sync"]["distance_ms"] = best_distance
+                    seg["smart_sync"]["initial_duration_sec"] = round(initial_smart_sync_duration_ms / 1000.0, 3)
+                    seg["smart_sync"]["initial_timing_duration_sec"] = round(
+                        initial_smart_sync_timing_ms / 1000.0,
+                        3
+                    )
+                    seg["text"] = best_text
+                    clean = best_text
+                    logger.info(
+                        "[%s] SmartSync %s: %.2fs -> %.2fs (timing %.2fs -> %.2fs) | %s",
+                        i,
+                        rewrite_mode,
+                        initial_smart_sync_duration_ms / 1000.0,
+                        generated_ms / 1000.0,
+                        initial_smart_sync_timing_ms / 1000.0,
+                        timing_duration_ms / 1000.0,
+                        clean
+                    )
+
+        seg["cleaned_text"] = clean
 
         segment_target_dbfs = target_active_dbfs
         if enable_segment_matching:
@@ -1240,22 +1974,26 @@ def synthesize_segments_with_timing(
 
         retry_candidate = (
             enable_tts_asr_retry
-            and babble_guard_model is not None
+            and asr_eval_model is not None
             and int(seg.get("tts_group_size", 1) or 1) == 1
-            and max(0.0, orig_end_val - orig_start_val) <= tts_asr_retry_max_segment_sec
+            and max(0.0, window_end_val - window_start_val) <= tts_asr_retry_max_segment_sec
             and _ends_with_terminal_punctuation(clean)
         )
 
         def finalize_candidate(candidate_audio: AudioSegment) -> tuple[AudioSegment, Dict[str, Any] | None, Dict[str, Any] | None, Dict[str, Any] | None]:
             corrected_candidate = candidate_audio
-            if len(candidate_audio) > available_ms > 0:
-                factor = min(len(candidate_audio) / available_ms, max_speedup_factor)
+            candidate_timing_ms = max(
+                1,
+                _timing_speech_stats(candidate_audio)["effective_duration_ms"] or len(candidate_audio)
+            )
+            if candidate_timing_ms > available_ms > 0:
+                factor = min(candidate_timing_ms / available_ms, max_speedup_factor)
                 speedup_input = candidate_audio + AudioSegment.silent(duration=max(0, speedup_tail_padding_ms))
                 corrected_candidate = _time_stretch_ffmpeg(speedup_input, playback_speed=factor)
             if enable_short_segment_tail_trim:
                 edge_silence_candidate = _edge_silence_ms(corrected_candidate)
                 tail_trim_ms = _compute_safe_tail_trim_ms(
-                    original_ms=original_ms,
+                    original_ms=available_ms,
                     corrected_ms=len(corrected_candidate),
                     trailing_silence_ms=edge_silence_candidate["trailing"],
                     short_segment_sec=short_segment_sec,
@@ -1277,8 +2015,8 @@ def synthesize_segments_with_timing(
                 corrected_candidate, cheap_tail_info = _trim_trailing_speech_island_fast(
                     audio=corrected_candidate,
                     expected_text=clean,
-                    original_ms=original_ms,
-                    segment_duration_sec=max(0.0, orig_end_val - orig_start_val),
+                    original_ms=available_ms,
+                    segment_duration_sec=available_ms / 1000.0,
                     tts_group_size=int(seg.get("tts_group_size", 1) or 1),
                     max_segment_sec=tts_cheap_tail_guard_max_segment_sec,
                     min_overhang_ms=tts_cheap_tail_guard_min_overhang_ms,
@@ -1291,9 +2029,9 @@ def synthesize_segments_with_timing(
             corrected_candidate, candidate_babble_info = _trim_trailing_babble(
                 audio=corrected_candidate,
                 expected_text=clean,
-                model_asr=babble_guard_model,
+                model_asr=tail_guard_asr_model,
                 language=language,
-                segment_duration_sec=max(0.0, orig_end_val - orig_start_val),
+                segment_duration_sec=available_ms / 1000.0,
                 tts_group_size=int(seg.get("tts_group_size", 1) or 1),
                 max_segment_sec=tts_babble_guard_max_segment_sec,
                 min_gap_ms=tts_babble_guard_min_gap_ms,
@@ -1301,13 +2039,14 @@ def synthesize_segments_with_timing(
                 max_island_ms=tts_babble_guard_max_island_ms,
                 search_window_ms=tts_babble_guard_search_window_ms,
                 max_trim_ms=tts_babble_guard_max_trim_ms,
-                anchor_words=tts_babble_guard_anchor_words
+                anchor_words=tts_babble_guard_anchor_words,
+                min_score_gain=tts_babble_guard_min_score_gain,
             )
 
             candidate_eval = None
             if retry_candidate:
                 recognized_candidate = _transcribe_short_audio(
-                    babble_guard_model,
+                    asr_eval_model,
                     corrected_candidate,
                     language
                 )
@@ -1320,19 +2059,54 @@ def synthesize_segments_with_timing(
 
         corrected, cheap_tail_info, babble_guard_info, asr_eval = finalize_candidate(seg_audio)
 
-        if retry_candidate and asr_eval and asr_eval["score"] < tts_asr_retry_min_score:
+        retry_needed = (
+            retry_candidate
+            and asr_eval is not None
+            and (
+                asr_eval["score"] < tts_asr_retry_min_score
+                or asr_eval.get("has_extra_tail")
+                or not asr_eval.get("has_suffix", True)
+            )
+        )
+
+        if retry_needed and asr_eval:
             best_audio = corrected
             best_cheap_tail_info = cheap_tail_info
             best_babble_guard_info = babble_guard_info
             best_eval = asr_eval
+            retry_reason = []
+            if asr_eval["score"] < tts_asr_retry_min_score:
+                retry_reason.append(f"score<{tts_asr_retry_min_score:.2f}")
+            if asr_eval.get("has_extra_tail"):
+                retry_reason.append("extra_tail")
+            if not asr_eval.get("has_suffix", True):
+                retry_reason.append("missing_suffix")
+            logger.info(
+                "[%s] TTS retry armed (%s) | %.3f | %s",
+                i,
+                ",".join(retry_reason) or "quality",
+                asr_eval["score"],
+                asr_eval["recognized_text"]
+            )
 
+            retry_text_variants = _build_tts_retry_text_variants(
+                seg["text"],
+                original_text=str(seg.get("original_text") or ""),
+                next_text=next_text_hint,
+                gap_after_sec=gap_after_hint_sec,
+                pause_after_sec=pause_after_hint,
+                tts_group_size=tts_group_size,
+                tts_backend_name=getattr(tts_backend, "name", ""),
+            )
             for attempt in range(1, tts_asr_retry_attempts + 1):
+                retry_text_idx = min(attempt - 1, max(0, len(retry_text_variants) - 1))
+                retry_text = retry_text_variants[retry_text_idx] if retry_text_variants else clean
                 with NamedTemporaryFile(suffix=".wav", delete=False) as retry_tmp:
                     retry_path = retry_tmp.name
                 try:
                     generate_audio_segment(
                         tts_backend=tts_backend,
-                        text=clean,
+                        text=retry_text,
                         output_path=retry_path,
                         speaker_wav=selected_references,
                         language=language,
@@ -1348,16 +2122,23 @@ def synthesize_segments_with_timing(
                             pass
 
                 retry_corrected, retry_cheap_tail_info, retry_babble_info, retry_eval = finalize_candidate(retry_audio)
-                if retry_eval and retry_eval["score"] > best_eval["score"]:
+                if _is_better_recognition_eval(retry_eval, best_eval):
                     best_audio = retry_corrected
                     best_cheap_tail_info = retry_cheap_tail_info
                     best_babble_guard_info = retry_babble_info
                     best_eval = retry_eval
+                    seg["tts_retry_text_used"] = retry_text
 
-                if retry_eval and retry_eval["score"] >= 0.995:
+                if (
+                    retry_eval
+                    and retry_eval["score"] >= 0.995
+                    and not retry_eval.get("has_extra_tail")
+                    and retry_eval.get("has_suffix", True)
+                    ):
                     break
 
-            if best_eval["score"] > asr_eval["score"]:
+            improved_retry = _is_better_recognition_eval(best_eval, asr_eval)
+            if improved_retry:
                 corrected = best_audio
                 cheap_tail_info = best_cheap_tail_info
                 babble_guard_info = best_babble_guard_info
@@ -1454,3 +2235,4 @@ def synthesize_segments_with_timing(
 
     full_audio.export(output_audio_path, format="wav")
     logger.info(f"Финальное аудио сохранено: {output_audio_path}")
+    return _serialize_tts_segments(segments)

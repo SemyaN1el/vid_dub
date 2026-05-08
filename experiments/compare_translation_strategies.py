@@ -5,10 +5,10 @@
     - sentence-level:   склейка в полные предложения → перевод → один сегмент на предложение
 
 Запуск:
-    python tests/test_translation.py
-    python tests/test_translation.py --suffix woman
-    python tests/test_translation.py --segments path/to/segments.json
-    python tests/test_translation.py --window 2 --pause 0.5
+    python experiments/compare_translation_strategies.py
+    python experiments/compare_translation_strategies.py --suffix woman
+    python experiments/compare_translation_strategies.py --segments path/to/segments.json
+    python experiments/compare_translation_strategies.py --window 2 --pause 0.5
 
 Результаты сохраняются в ./data/test/
 """
@@ -27,6 +27,7 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
+from experiments._experiment_paths import resolve_segments_path
 from src.translation import (
     load_translation_model,
     translate_segments,
@@ -236,8 +237,8 @@ if __name__ == "__main__":
                         help="Макс. пауза для склейки в sentence-level (по умолчанию: 0.5)")
     args = parser.parse_args()
 
-    segments_path = args.segments or os.path.join(
-        cfg.OUTPUT_PATH, f"segments_{args.suffix}.json"
+    segments_path = args.segments or str(
+        resolve_segments_path(cfg.OUTPUT_PATH, args.suffix, cfg.TEST_OUTPUT_PATH)
     )
 
     run_test(

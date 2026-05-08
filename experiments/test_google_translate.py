@@ -5,9 +5,9 @@
 Установка: pip install googletrans==4.0.0rc1
 
 Запуск:
-    python tests/test_google_translate.py
-    python tests/test_google_translate.py --segments data/test/segments_man.json
-    python tests/test_google_translate.py --compare   # сравнить с уже готовыми NLLB-результатами
+    python experiments/test_google_translate.py
+    python experiments/test_google_translate.py --segments data/test/man/segments.json
+    python experiments/test_google_translate.py --compare   # сравнить с уже готовыми NLLB-результатами
 
 Результаты сохраняются в ./data/test/
 """
@@ -22,6 +22,7 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config as cfg
+from experiments._experiment_paths import resolve_segments_path
 from utils.helpers import manage_directory
 
 logging.basicConfig(
@@ -255,8 +256,8 @@ if __name__ == "__main__":
                         help="Добавить в сравнение готовые NLLB-результаты из ./data/test/")
     args = parser.parse_args()
 
-    segments_path = args.segments or os.path.join(
-        f"data/test/" + f"segments_{args.suffix}.json"
+    segments_path = args.segments or str(
+        resolve_segments_path(cfg.OUTPUT_PATH, args.suffix, cfg.TEST_OUTPUT_PATH)
     )
 
     run_test(segments_path=segments_path, suffix=args.suffix, compare=args.compare)
