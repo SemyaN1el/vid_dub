@@ -104,8 +104,13 @@ data/output/<job-name>/
 
 - `src/tts.py`
   - XTTS synthesis orchestration.
-  - Audio level matching, compression, peak ceiling.
+  - SmartSync/TTS retry orchestration и финальная сборка сегментов.
   - Сериализация TTS-таймингов обратно в `translated_segments.json`.
+
+- `src/tts_audio.py`
+  - Оценка active speech dBFS.
+  - Segment level matching и локальная подстройка target dBFS по source vocals.
+  - Финальная компрессия и peak ceiling.
 
 - `src/tts_guards.py`
   - Cheap tail guard и safe tail trim.
@@ -160,7 +165,7 @@ data/output/<job-name>/
   - Это не unit-тесты и не должны запускаться как быстрый CI-контур.
 
 - `tests/unit/`
-  - Быстрые unit-тесты для ASR metadata, pipeline paths, subtitles и TTS serialization.
+  - Быстрые unit-тесты для ASR metadata, pipeline paths, subtitles, TTS serialization и вынесенных TTS helpers.
 
 ## 4. Контракты между шагами
 
@@ -332,17 +337,18 @@ speakers_xtts.pth
 - reference routing вынесен из `src/tts.py` в `src/tts_routing.py`;
 - timing/window logic вынесена из `src/tts.py` в `src/tts_timing.py`;
 - tail/babble guards вынесены из `src/tts.py` в `src/tts_guards.py`;
-- smoke-run на коротком видео был успешно пройден до предыдущего коммита.
+- audio level/compression helpers вынесены из `src/tts.py` в `src/tts_audio.py`;
+- smoke-run на коротком видео был успешно пройден перед audio-refactor.
 
 ## 7. Текущие инженерные риски
 
 ### P1. `src/tts.py` слишком крупный
 
-В одном файле все еще смешаны SmartSync, level matching и финальная сборка аудио. Настройки, text cleanup/grouping, reference routing, timing/window logic и guards уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
+В одном файле все еще смешаны SmartSync, TTS retry и финальная сборка аудио. Настройки, text cleanup/grouping, reference routing, timing/window logic, guards и audio helpers уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
 
 ### P1. Мало тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules и guards. Следующий пробел - audio level/compression helpers и SmartSync acceptance edge cases.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards и audio level/compression helpers. Следующий пробел - SmartSync acceptance edge cases и более формальный smoke-сценарий.
 
 ### P1. Эксперименты не формализованы как воспроизводимый benchmark
 
@@ -379,7 +385,7 @@ speakers_xtts.pth
 - reference routing - выполнено, `src/tts_routing.py`;
 - timing/window logic - выполнено, `src/tts_timing.py`;
 - tail/babble guards - выполнено, `src/tts_guards.py`;
-- audio level/compression helpers.
+- audio level/compression helpers - выполнено, `src/tts_audio.py`.
 
 ### Этап 3. Репозиторная чистка
 
@@ -391,4 +397,4 @@ speakers_xtts.pth
 
 ## 9. Практический вывод
 
-Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск и базовые тесты. Dataclass-конфиги TTS подготовили код к следующему этапу: постепенному разделению `src/tts.py` без изменения поведения.
+Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск и базовые тесты. Основные TTS helper-зоны вынесены из `src/tts.py`; следующий полезный этап - аккуратно отделить SmartSync/TTS retry orchestration или формализовать smoke-run как повторяемую проверку.
