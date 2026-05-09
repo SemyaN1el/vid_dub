@@ -8,6 +8,7 @@ from scripts.benchmark_tts_profiles import (
     collect_profile_result,
     rewrite_speaker_profile_paths,
     select_profiles,
+    write_listen_pack,
 )
 from utils.pipeline_io import build_pipeline_paths
 
@@ -16,6 +17,12 @@ def _write_json(path: str | Path, payload: object) -> None:
     resolved = Path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_file(path: str | Path, payload: bytes = b"x") -> None:
+    resolved = Path(path)
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_bytes(payload)
 
 
 def test_select_profiles_defaults_to_builtin_order() -> None:
@@ -140,5 +147,60 @@ def test_collect_profile_result_reads_metrics_and_tts_summary(tmp_path: Path) ->
     assert result["xtts_temperature"] == 0.55
     assert result["xtts_top_p"] == 0.82
     assert result["xtts_repetition_penalty"] == 2.35
+    assert result["final_video"] == paths["final_video"]
+    assert result["final_dubbing"] == paths["final_voice"]
+    assert result["tts_config_json"] == paths["tts_config_snapshot"]
     assert result["over_window"] == 1
     assert result["babble_guard_trims"] == 1
+
+
+def test_write_listen_pack_copies_profile_artifacts(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+    summary_dir = tmp_path / "summary"
+    final_video = profile_dir / "final_video.mp4"
+    final_dubbing = profile_dir / "final_dubbing.wav"
+    run_report = profile_dir / "run_report.md"
+    metrics_json = profile_dir / "metrics.json"
+    tts_config_json = profile_dir / "tts_config.json"
+    for path in (final_video, final_dubbing, run_report, metrics_json, tts_config_json):
+        _write_file(path)
+
+    write_listen_pack(
+        results=[
+            {
+                "profile": "baseline",
+                "description": "Baseline",
+                "speaker_verification": 0.8,
+                "wer": 0.2,
+                "cer": 0.1,
+                "labse_mean": 0.85,
+                "smart_sync_enabled": True,
+                "segment_matching_enabled": False,
+                "babble_guard_enabled": True,
+                "xtts_temperature": 0.55,
+                "xtts_top_p": 0.82,
+                "xtts_repetition_penalty": 2.35,
+                "over_window": 1,
+                "smart_sync_rewrites": 1,
+                "babble_guard_trims": 0,
+                "final_video": str(final_video),
+                "final_dubbing": str(final_dubbing),
+                "run_report": str(run_report),
+                "metrics_json": str(metrics_json),
+                "tts_config_json": str(tts_config_json),
+            }
+        ],
+        summary_dir=summary_dir,
+        prep_job_name="bench_prep",
+        video_path=tmp_path / "input.mp4",
+    )
+
+    pack_profile_dir = summary_dir / "listen_pack" / "baseline"
+    assert (pack_profile_dir / "final_video.mp4").is_file()
+    assert (pack_profile_dir / "final_dubbing.wav").is_file()
+    assert (pack_profile_dir / "run_report.md").is_file()
+    assert (pack_profile_dir / "metrics.json").is_file()
+    assert (pack_profile_dir / "tts_config.json").is_file()
+    readme = (summary_dir / "listen_pack" / "README.md").read_text(encoding="utf-8")
+    assert "baseline" in readme
+    assert "baseline/final_video.mp4" in readme

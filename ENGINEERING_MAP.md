@@ -89,6 +89,7 @@ data/output/<job-name>/
   - Сравнение TTS-профилей на одном подготовленном short job.
   - Профили: baseline, SmartSync on/off, segment matching on/off, babble guard on/off, XTTS conservative/expressive.
   - Для каждого профиля прогоняются `tts`, `postprocess`, `subtitles`, `metrics`; итог с метриками и TTS config snapshot пишется в `tts_benchmark_summary.md/.csv/.json`.
+  - Собирает `listen_pack/` с ключевыми артефактами профилей для ручной прослушки.
 
 - `.github/workflows/unit.yml`
   - Быстрый CI-контур на push и pull request.
@@ -454,6 +455,7 @@ speakers_xtts.pth
 - [x] Использовать один общий prep job для `preprocess`, `asr`, `translate`.
 - [x] Сравнивать `baseline`, SmartSync on/off, segment matching on/off, babble guard on/off и XTTS conservative/expressive.
 - [x] Писать итоговые `tts_benchmark_summary.md`, `tts_benchmark_summary.csv`, `tts_benchmark_summary.json`.
+- [x] Собирать `listen_pack/` с `final_video.mp4`, `final_dubbing.wav`, `run_report.md`, `metrics.json`, `tts_config.json`.
 - [x] Проверить инфраструктуру baseline sanity-run на `smoke_20s.mp4`.
 - [ ] Запустить полный benchmark всех профилей на `smoke_20s.mp4`.
 - [ ] Прослушать лучшие и худшие профили по таблице метрик.

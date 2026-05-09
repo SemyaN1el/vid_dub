@@ -310,6 +310,7 @@ python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --jo
 data/test/<prefix>_summary/tts_benchmark_summary.md
 data/test/<prefix>_summary/tts_benchmark_summary.csv
 data/test/<prefix>_summary/tts_benchmark_summary.json
+data/test/<prefix>_summary/listen_pack/
 ```
 
 Доступные профили:

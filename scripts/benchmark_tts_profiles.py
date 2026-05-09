@@ -410,6 +410,9 @@ def collect_profile_result(
         "smart_sync_rewrites": tts_summary["smart_sync_count"],
         "tts_retry_changes": tts_summary["tts_retry_count"],
         "output_dir": paths["output"],
+        "final_video": paths["final_video"],
+        "final_dubbing": paths["final_voice"],
+        "tts_config_json": paths["tts_config_snapshot"],
         "run_report": paths["run_report"],
         "metrics_json": paths["metrics_summary"],
     }
@@ -499,6 +502,100 @@ def write_benchmark_summary(
     print(f"Benchmark summary written to: {md_path}", flush=True)
     print(f"CSV: {csv_path}", flush=True)
     print(f"JSON: {json_path}", flush=True)
+
+
+def _copy_if_exists(source: str | Path | None, target_dir: Path) -> str | None:
+    if not source:
+        return None
+    source_path = Path(source)
+    if not source_path.is_file():
+        return None
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / source_path.name
+    shutil.copy2(source_path, target_path)
+    return target_path.name
+
+
+def write_listen_pack(
+    *,
+    results: list[dict[str, Any]],
+    summary_dir: Path,
+    prep_job_name: str,
+    video_path: Path,
+) -> None:
+    pack_dir = summary_dir / "listen_pack"
+    if pack_dir.exists():
+        shutil.rmtree(pack_dir)
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    readme_lines = [
+        "# TTS Benchmark Listen Pack",
+        "",
+        f"- Video: `{video_path}`",
+        f"- Prep job: `{prep_job_name}`",
+        "",
+        "| Profile | Config | SV | WER | CER | LaBSE | Artifacts |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+
+    for result in results:
+        profile_name = str(result["profile"])
+        profile_dir = pack_dir / profile_name
+        copied: list[str] = []
+        for artifact_key in (
+            "final_video",
+            "final_dubbing",
+            "run_report",
+            "metrics_json",
+            "tts_config_json",
+        ):
+            copied_name = _copy_if_exists(result.get(artifact_key), profile_dir)
+            if copied_name:
+                copied.append(copied_name)
+
+        profile_readme = [
+            f"# {profile_name}",
+            "",
+            f"- Description: {result.get('description', '')}",
+            f"- Config: `{_format_config_brief(result)}`",
+            f"- Speaker verification: {_format_metric(result.get('speaker_verification'))}",
+            f"- WER: {_format_metric(result.get('wer'))}",
+            f"- CER: {_format_metric(result.get('cer'))}",
+            f"- LaBSE mean: {_format_metric(result.get('labse_mean'))}",
+            f"- Segments over timing window: {result.get('over_window', '')}",
+            f"- SmartSync rewrites: {result.get('smart_sync_rewrites', '')}",
+            f"- Babble guard trims: {result.get('babble_guard_trims', '')}",
+            "",
+            "## Files",
+            "",
+        ]
+        if copied:
+            profile_readme.extend(f"- `{name}`" for name in copied)
+        else:
+            profile_readme.append("- No artifacts copied.")
+        profile_readme.append("")
+        (profile_dir / "README.md").write_text(
+            "\n".join(profile_readme),
+            encoding="utf-8",
+        )
+
+        artifact_links = ", ".join(f"`{profile_name}/{name}`" for name in copied)
+        if not artifact_links:
+            artifact_links = "n/a"
+        readme_lines.append(
+            "| "
+            f"{profile_name} | "
+            f"`{_format_config_brief(result)}` | "
+            f"{_format_metric(result.get('speaker_verification'))} | "
+            f"{_format_metric(result.get('wer'))} | "
+            f"{_format_metric(result.get('cer'))} | "
+            f"{_format_metric(result.get('labse_mean'))} | "
+            f"{artifact_links} |"
+        )
+
+    readme_lines.append("")
+    (pack_dir / "README.md").write_text("\n".join(readme_lines), encoding="utf-8")
+    print(f"Listen pack written to: {pack_dir}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -604,9 +701,16 @@ def main() -> int:
             results.append(collect_profile_result(profile, profile_job_name, profile_paths))
 
     if not args.dry_run:
+        summary_dir = Path(summary_paths["output"])
         write_benchmark_summary(
             results=results,
-            summary_dir=Path(summary_paths["output"]),
+            summary_dir=summary_dir,
+            prep_job_name=prep_job_name,
+            video_path=video_path,
+        )
+        write_listen_pack(
+            results=results,
+            summary_dir=summary_dir,
             prep_job_name=prep_job_name,
             video_path=video_path,
         )
