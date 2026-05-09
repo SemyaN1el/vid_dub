@@ -149,7 +149,7 @@ python main.py --video .\data\input\video.mp4 --job-name demo --step all --resum
 python scripts\smoke_pipeline.py
 ```
 
-По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `metrics.json`, `run_report.md`, `translated_segments.json` и `subtitles_manifest.json`.
+По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `tts_config.json`, `metrics.json`, `run_report.md`, `translated_segments.json` и `subtitles_manifest.json`.
 
 Чтобы только проверить уже готовые артефакты без повторного запуска:
 
@@ -209,6 +209,7 @@ data/output/<job-name>/
   final_dubbing.wav
   final_mix.wav
   final_video.mp4
+  tts_config.json
   metrics.json
   run_report.md
   subtitles/
@@ -252,7 +253,7 @@ data/output/<job-name>/
 python main.py --step metrics --video .\data\input\video.mp4 --job-name demo
 ```
 
-`run_report.md` содержит краткий verdict, основные метрики, количество сегментов, события TTS grouping/guards, timing pressure и ссылки на ключевые артефакты запуска.
+Шаг `tts` сохраняет фактический snapshot настроек в `tts_config.json`: XTTS generation, SmartSync, grouping, routing, guards и audio level. Шаг `metrics` копирует этот snapshot в `metrics.json` (`tts_config`), а `run_report.md` показывает краткий verdict, основные метрики, TTS config snapshot, количество сегментов, события TTS grouping/guards, timing pressure и ссылки на ключевые артефакты запуска.
 
 ## Эксперименты и тесты
 
@@ -284,7 +285,7 @@ Benchmark TTS-профилей на одном коротком видео:
 python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --job-prefix tts_benchmark
 ```
 
-Скрипт готовит общий upstream job `<prefix>_prep`, затем для каждого профиля копирует одинаковые `segments.json`, `translated_segments.json`, speaker refs и аудио-артефакты, прогоняет `tts -> postprocess -> subtitles -> metrics` и пишет сводки:
+Скрипт готовит общий upstream job `<prefix>_prep`, затем для каждого профиля копирует одинаковые `segments.json`, `translated_segments.json`, speaker refs и аудио-артефакты, прогоняет `tts -> postprocess -> subtitles -> metrics` и пишет сводки с метриками и фактическим TTS config snapshot:
 
 ```text
 data/test/<prefix>_summary/tts_benchmark_summary.md

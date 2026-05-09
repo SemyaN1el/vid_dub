@@ -295,6 +295,7 @@ def step_translate(paths: dict, suffix: str) -> None:
 
 def step_tts(paths: dict, suffix: str) -> None:
     from src.tts_backends import create_tts_backend
+    from src.config_snapshot import build_tts_config_snapshot
     from src.tts import (
         AudioLevelConfig,
         SegmentRoutingConfig,
@@ -425,6 +426,9 @@ def step_tts(paths: dict, suffix: str) -> None:
         segment_match_max_delta_db=cfg.SEGMENT_MATCH_MAX_DELTA_DB,
         segment_match_min_active_ratio=cfg.SEGMENT_MATCH_MIN_ACTIVE_RATIO,
     )
+    tts_config_snapshot = build_tts_config_snapshot(cfg)
+    with open(paths["tts_config_snapshot"], "w", encoding="utf-8") as f:
+        json.dump(tts_config_snapshot, f, ensure_ascii=False, indent=2)
 
     tts_segments = synthesize_segments_with_timing(
         tts_backend=tts_backend,
@@ -515,6 +519,7 @@ def step_metrics(paths: dict, suffix: str) -> None:
     from src.metrics import (speaker_verification_score, compute_wer_cer,
                               compute_labse_similarity, print_metrics_summary,
                               plot_labse)
+    from src.config_snapshot import build_tts_config_snapshot
     from src.reporting import write_run_report
 
     logger.info("╔══ ШАГ 7: МЕТРИКИ ══╗")
@@ -536,6 +541,15 @@ def step_metrics(paths: dict, suffix: str) -> None:
     gc.collect(); clear_torch_cache()
 
     labse = compute_labse_similarity(segments, translated)
+
+    tts_config_snapshot = None
+    if os.path.exists(paths.get("tts_config_snapshot", "")):
+        with open(paths["tts_config_snapshot"], "r", encoding="utf-8") as f:
+            loaded_tts_config = json.load(f)
+        if isinstance(loaded_tts_config, dict):
+            tts_config_snapshot = loaded_tts_config
+    if tts_config_snapshot is None:
+        tts_config_snapshot = build_tts_config_snapshot(cfg)
 
     metrics_summary = {
         "job_name": suffix,
@@ -559,6 +573,7 @@ def step_metrics(paths: dict, suffix: str) -> None:
             "metrics_asr_api_model": cfg.METRICS_ASR_API_MODEL if cfg.METRICS_ASR_PROVIDER == "groq" else None,
             "tts_backend": "xtts",
         },
+        "tts_config": tts_config_snapshot,
         "metrics": {
             "speaker_verification": spk_score,
             "wer": wer_cer.get("wer"),

@@ -57,6 +57,7 @@ data/output/<job-name>/
   final_dubbing.wav
   final_mix.wav
   final_video.mp4
+  tts_config.json
   metrics.json
   run_report.md
   subtitles/
@@ -75,6 +76,7 @@ data/output/<job-name>/
   - Построение путей через `utils/pipeline_io.py`.
   - Preflight-проверка окружения через `--check-env`.
   - Resume-режим через `--resume` и принудительный пересчет через `--force-step`.
+  - Snapshot TTS-настроек в `tts_config.json` и `metrics.json` перед генерацией `run_report.md`.
 
 - `scripts/smoke_pipeline.py`
   - Запуск короткого `--test` smoke-run через `main.py --step all`.
@@ -84,7 +86,7 @@ data/output/<job-name>/
 - `scripts/benchmark_tts_profiles.py`
   - Сравнение TTS-профилей на одном подготовленном short job.
   - Профили: baseline, SmartSync on/off, segment matching on/off, babble guard on/off, XTTS conservative/expressive.
-  - Для каждого профиля прогоняются `tts`, `postprocess`, `subtitles`, `metrics`; итог пишется в `tts_benchmark_summary.md/.csv/.json`.
+  - Для каждого профиля прогоняются `tts`, `postprocess`, `subtitles`, `metrics`; итог с метриками и TTS config snapshot пишется в `tts_benchmark_summary.md/.csv/.json`.
 
 ### Конфигурация
 
@@ -163,7 +165,10 @@ data/output/<job-name>/
 
 - `src/reporting.py`
   - Генерация `run_report.md` после шага `metrics`.
-  - Сводка по сегментам, TTS grouping/guards, timing pressure, метрикам и артефактам.
+  - Сводка по сегментам, TTS grouping/guards, timing pressure, метрикам, TTS config snapshot и артефактам.
+
+- `src/config_snapshot.py`
+  - Сериализация фактических TTS-настроек запуска для `tts_config.json`, `metrics.json`, `run_report.md` и benchmark-сводок.
 
 ### Утилиты
 
@@ -311,6 +316,7 @@ data/output/<job-name>/
 - `final_dubbing.wav`
 - `segments.json`
 - `translated_segments.json`
+- `tts_config.json` если уже был выполнен шаг `tts`.
 
 Выход:
 
@@ -352,6 +358,7 @@ speakers_xtts.pth
 - добавлен `python scripts/smoke_pipeline.py`;
 - добавлен `python scripts/benchmark_tts_profiles.py`;
 - добавлен `run_report.md` после шага `metrics`;
+- добавлен snapshot TTS-настроек в `tts_config.json`, `metrics.json`, `run_report.md` и benchmark-сводки;
 - добавлен `--resume` и `--force-step` для пропуска уже готовых шагов;
 - подключен шаг `subtitles`;
 - введена структура `data/output/<job-name>/`;

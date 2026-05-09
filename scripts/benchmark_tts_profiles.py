@@ -322,6 +322,35 @@ def _format_metric(value: float | None) -> str:
     return "" if value is None else f"{value:.4f}"
 
 
+def _nested_config_value(payload: Mapping[str, Any], *keys: str) -> Any:
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, Mapping) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _format_config_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    return str(value)
+
+
+def _format_config_brief(result: Mapping[str, Any]) -> str:
+    parts = [
+        f"SS={_format_config_value(result.get('smart_sync_enabled'))}",
+        f"SM={_format_config_value(result.get('segment_matching_enabled'))}",
+        f"BG={_format_config_value(result.get('babble_guard_enabled'))}",
+        f"T={_format_config_value(result.get('xtts_temperature'))}",
+        f"P={_format_config_value(result.get('xtts_top_p'))}",
+        f"RP={_format_config_value(result.get('xtts_repetition_penalty'))}",
+    ]
+    return " ".join(part for part in parts if not part.endswith("="))
+
+
 def collect_profile_result(
     profile: TTSBenchmarkProfile,
     job_name: str,
@@ -332,6 +361,9 @@ def collect_profile_result(
     metrics = metrics_payload.get("metrics") if isinstance(metrics_payload, dict) else {}
     if not isinstance(metrics, dict):
         metrics = {}
+    tts_config = metrics_payload.get("tts_config") if isinstance(metrics_payload, dict) else {}
+    if not isinstance(tts_config, dict):
+        tts_config = {}
     if not isinstance(translated_segments, list):
         translated_segments = []
     tts_summary = summarize_tts_segments(translated_segments)
@@ -341,6 +373,29 @@ def collect_profile_result(
         "job_name": job_name,
         "description": profile.description,
         "overrides": dict(profile.overrides),
+        "tts_config": tts_config,
+        "smart_sync_enabled": _nested_config_value(tts_config, "smart_sync", "enabled"),
+        "segment_matching_enabled": _nested_config_value(
+            tts_config,
+            "audio_level",
+            "segment_matching_enabled",
+        ),
+        "babble_guard_enabled": _nested_config_value(
+            tts_config,
+            "tail_guards",
+            "babble_guard_enabled",
+        ),
+        "xtts_temperature": _nested_config_value(
+            tts_config,
+            "xtts_generation",
+            "temperature",
+        ),
+        "xtts_top_p": _nested_config_value(tts_config, "xtts_generation", "top_p"),
+        "xtts_repetition_penalty": _nested_config_value(
+            tts_config,
+            "xtts_generation",
+            "repetition_penalty",
+        ),
         "speaker_verification": _metric(metrics, "speaker_verification"),
         "wer": _metric(metrics, "wer"),
         "cer": _metric(metrics, "cer"),
@@ -379,6 +434,12 @@ def write_benchmark_summary(
         "wer",
         "cer",
         "labse_mean",
+        "smart_sync_enabled",
+        "segment_matching_enabled",
+        "babble_guard_enabled",
+        "xtts_temperature",
+        "xtts_top_p",
+        "xtts_repetition_penalty",
         "translated_segments",
         "grouped_segments",
         "over_window",
@@ -414,14 +475,15 @@ def write_benchmark_summary(
         f"- Video: `{video_path}`",
         f"- Prep job: `{prep_job_name}`",
         "",
-        "| Profile | SV | WER | CER | LaBSE | Over window | SmartSync | Babble trims | Report |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Profile | Config | SV | WER | CER | LaBSE | Over window | SmartSync | Babble trims | Report |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for result in results:
         report_path = Path(str(result["run_report"]))
         lines.append(
             "| "
             f"{result['profile']} | "
+            f"`{_format_config_brief(result)}` | "
             f"{_format_metric(result['speaker_verification'])} | "
             f"{_format_metric(result['wer'])} | "
             f"{_format_metric(result['cer'])} | "

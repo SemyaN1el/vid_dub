@@ -93,6 +93,7 @@ def validate_artifacts(
     _require_file(paths["final_mix"], "final_mix.wav", min_bytes=128)
     _require_file(paths["final_video"], "final_video.mp4", min_bytes=128)
     _require_file(paths["speaker_ref"], "speaker_ref.wav", min_bytes=128)
+    tts_config_path = _require_file(paths["tts_config_snapshot"], "tts_config.json")
     _require_file(paths["run_report"], "run_report.md")
 
     segments_path = _require_file(paths["segments"], "segments.json")
@@ -107,9 +108,15 @@ def validate_artifacts(
     )
 
     metrics_path = _require_file(paths["metrics_summary"], "metrics.json")
+    tts_config = _load_json(tts_config_path, "tts_config.json")
+    if not isinstance(tts_config, dict):
+        raise SmokeValidationError("tts_config.json must be a JSON object")
+
     metrics_payload = _load_json(metrics_path, "metrics.json")
     if not isinstance(metrics_payload, dict):
         raise SmokeValidationError("metrics.json must be a JSON object")
+    if not isinstance(metrics_payload.get("tts_config"), dict):
+        raise SmokeValidationError("metrics.json must contain a tts_config object")
     metrics = metrics_payload.get("metrics")
     if not isinstance(metrics, dict):
         raise SmokeValidationError("metrics.json must contain a metrics object")

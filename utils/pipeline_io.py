@@ -121,6 +121,7 @@ def build_job_artifact_paths(job_name: str, base_root: str) -> Dict[str, str]:
             final_dubbing.wav
             final_mix.wav
             final_video.mp4
+            tts_config.json
             metrics.json
             run_report.md
             temp/
@@ -153,6 +154,7 @@ def build_job_artifact_paths(job_name: str, base_root: str) -> Dict[str, str]:
         "final_voice":         os.path.join(job_dir, "final_dubbing.wav"),
         "final_mix":           os.path.join(job_dir, "final_mix.wav"),
         "final_video":         os.path.join(job_dir, "final_video.mp4"),
+        "tts_config_snapshot": os.path.join(job_dir, "tts_config.json"),
         "metrics_summary":     os.path.join(job_dir, "metrics.json"),
         "run_report":          os.path.join(job_dir, "run_report.md"),
         "segments":            os.path.join(job_dir, "segments.json"),

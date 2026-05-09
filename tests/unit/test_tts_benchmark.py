@@ -90,6 +90,16 @@ def test_collect_profile_result_reads_metrics_and_tts_summary(tmp_path: Path) ->
     _write_json(
         paths["metrics_summary"],
         {
+            "tts_config": {
+                "xtts_generation": {
+                    "temperature": 0.55,
+                    "top_p": 0.82,
+                    "repetition_penalty": 2.35,
+                },
+                "smart_sync": {"enabled": True},
+                "audio_level": {"segment_matching_enabled": False},
+                "tail_guards": {"babble_guard_enabled": True},
+            },
             "metrics": {
                 "speaker_verification": 0.8,
                 "wer": 0.2,
@@ -114,5 +124,11 @@ def test_collect_profile_result_reads_metrics_and_tts_summary(tmp_path: Path) ->
 
     assert result["profile"] == "baseline"
     assert result["wer"] == 0.2
+    assert result["smart_sync_enabled"] is True
+    assert result["segment_matching_enabled"] is False
+    assert result["babble_guard_enabled"] is True
+    assert result["xtts_temperature"] == 0.55
+    assert result["xtts_top_p"] == 0.82
+    assert result["xtts_repetition_penalty"] == 2.35
     assert result["over_window"] == 1
     assert result["babble_guard_trims"] == 1

@@ -37,6 +37,32 @@ def test_build_run_report_includes_verdict_metrics_and_artifacts(tmp_path: Path)
     metrics_summary = {
         "job_name": "demo",
         "created_at": "2026-05-09T04:00:00",
+        "tts_config": {
+            "xtts_generation": {
+                "temperature": 0.55,
+                "top_p": 0.82,
+                "repetition_penalty": 2.35,
+            },
+            "smart_sync": {
+                "enabled": True,
+                "provider": "groq",
+                "max_rewrites": 1,
+            },
+            "runtime": {
+                "grouping_enabled": True,
+            },
+            "segment_routing": {
+                "enabled": True,
+            },
+            "audio_level": {
+                "segment_matching_enabled": False,
+                "target_dbfs": -15.0,
+            },
+            "tail_guards": {
+                "babble_guard_enabled": True,
+                "asr_retry_enabled": False,
+            },
+        },
         "metrics": {
             "speaker_verification": 0.86,
             "wer": 0.14,
@@ -64,7 +90,12 @@ def test_build_run_report_includes_verdict_metrics_and_artifacts(tmp_path: Path)
     assert "# Pipeline Run Report" in report
     assert "Verdict: **OK**" in report
     assert "| WER | 0.1400 |" in report
+    assert "## TTS Config" in report
+    assert "| XTTS temperature | `0.55` |" in report
+    assert "| SmartSync enabled | `true` |" in report
+    assert "| Segment matching enabled | `false` |" in report
     assert "final_video" in report
+    assert "tts_config" in report
     assert "subtitles_manifest" in report
 
 

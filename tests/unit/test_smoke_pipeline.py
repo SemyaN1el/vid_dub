@@ -26,6 +26,13 @@ def _write_smoke_tree(tmp_path: Path) -> dict[str, str]:
     _write_file(paths["final_mix"])
     _write_file(paths["final_video"])
     _write_file(paths["speaker_ref"])
+    _write_json(
+        paths["tts_config_snapshot"],
+        {
+            "xtts_generation": {"temperature": 0.55},
+            "smart_sync": {"enabled": True},
+        },
+    )
     _write_file(paths["run_report"])
     _write_json(paths["segments"], [{"text": "hello", "start": 0.0, "end": 1.0}])
     _write_json(
@@ -35,6 +42,10 @@ def _write_smoke_tree(tmp_path: Path) -> dict[str, str]:
     _write_json(
         paths["metrics_summary"],
         {
+            "tts_config": {
+                "xtts_generation": {"temperature": 0.55},
+                "smart_sync": {"enabled": True},
+            },
             "metrics": {
                 "speaker_verification": 0.9,
                 "wer": 0.1,

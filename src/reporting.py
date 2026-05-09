@@ -25,6 +25,14 @@ def _format_float(value: float | None, digits: int = 4) -> str:
     return f"{value:.{digits}f}"
 
 
+def _format_config_value(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 def _format_duration(value: float | None) -> str:
     if value is None:
         return "n/a"
@@ -174,6 +182,57 @@ def _metric_status(metrics: MetricMap) -> str:
     return "OK"
 
 
+def _nested_value(payload: dict[str, Any], *keys: str) -> Any:
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _tts_config_rows(tts_config: Any) -> list[tuple[str, Any]]:
+    if not isinstance(tts_config, dict):
+        return []
+
+    rows = [
+        (
+            "XTTS temperature",
+            _nested_value(tts_config, "xtts_generation", "temperature"),
+        ),
+        ("XTTS top_p", _nested_value(tts_config, "xtts_generation", "top_p")),
+        (
+            "XTTS repetition_penalty",
+            _nested_value(tts_config, "xtts_generation", "repetition_penalty"),
+        ),
+        ("SmartSync enabled", _nested_value(tts_config, "smart_sync", "enabled")),
+        ("SmartSync provider", _nested_value(tts_config, "smart_sync", "provider")),
+        (
+            "SmartSync max_rewrites",
+            _nested_value(tts_config, "smart_sync", "max_rewrites"),
+        ),
+        ("TTS grouping enabled", _nested_value(tts_config, "runtime", "grouping_enabled")),
+        (
+            "Segment routing enabled",
+            _nested_value(tts_config, "segment_routing", "enabled"),
+        ),
+        (
+            "Segment matching enabled",
+            _nested_value(tts_config, "audio_level", "segment_matching_enabled"),
+        ),
+        (
+            "Babble guard enabled",
+            _nested_value(tts_config, "tail_guards", "babble_guard_enabled"),
+        ),
+        (
+            "ASR retry enabled",
+            _nested_value(tts_config, "tail_guards", "asr_retry_enabled"),
+        ),
+        ("Target dBFS", _nested_value(tts_config, "audio_level", "target_dbfs")),
+    ]
+    return [(label, value) for label, value in rows if value is not None]
+
+
 def build_run_report(
     *,
     paths: dict[str, str],
@@ -195,6 +254,7 @@ def build_run_report(
         "final_video": paths.get("final_video"),
         "final_dubbing": paths.get("final_voice"),
         "final_mix": paths.get("final_mix"),
+        "tts_config": paths.get("tts_config_snapshot"),
         "metrics": paths.get("metrics_summary"),
         "translated_segments": paths.get("translated_segments"),
         "subtitles_manifest": os.path.join(
@@ -248,11 +308,26 @@ def build_run_report(
         f"| LaBSE min | {_format_float(_as_float(metrics.get('labse_min')))} |",
         f"| LaBSE max | {_format_float(_as_float(metrics.get('labse_max')))} |",
         "",
+    ]
+
+    tts_config_rows = _tts_config_rows(metrics_summary.get("tts_config"))
+    if tts_config_rows:
+        lines.extend([
+            "## TTS Config",
+            "",
+            "| Setting | Value |",
+            "| --- | ---: |",
+        ])
+        for label, value in tts_config_rows:
+            lines.append(f"| {label} | `{_format_config_value(value)}` |")
+        lines.append("")
+
+    lines.extend([
         "## Artifacts",
         "",
         "| Artifact | Path | Status |",
         "| --- | --- | --- |",
-    ]
+    ])
     for label, path in artifact_paths.items():
         lines.append(
             f"| {label} | `{_relative_or_abs(path, output_dir)}` | {_file_status(path)} |"
