@@ -104,9 +104,13 @@ data/output/<job-name>/
 
 - `src/tts.py`
   - XTTS synthesis orchestration.
-  - Cheap tail guard, babble guard, ASR retry.
   - Audio level matching, compression, peak ceiling.
   - Сериализация TTS-таймингов обратно в `translated_segments.json`.
+
+- `src/tts_guards.py`
+  - Cheap tail guard и safe tail trim.
+  - Babble guard и ASR retry scoring.
+  - Общие recognition helpers для SmartSync и TTS retry.
 
 - `src/tts_timing.py`
   - Расчет timing window для сегмента.
@@ -327,17 +331,18 @@ speakers_xtts.pth
 - text cleanup/grouping вынесены из `src/tts.py` в `src/tts_text.py`;
 - reference routing вынесен из `src/tts.py` в `src/tts_routing.py`;
 - timing/window logic вынесена из `src/tts.py` в `src/tts_timing.py`;
+- tail/babble guards вынесены из `src/tts.py` в `src/tts_guards.py`;
 - smoke-run на коротком видео был успешно пройден до предыдущего коммита.
 
 ## 7. Текущие инженерные риски
 
 ### P1. `src/tts.py` слишком крупный
 
-В одном файле все еще смешаны SmartSync, tail guards, ASR retry, level matching и финальная сборка аудио. Настройки, text cleanup/grouping, reference routing и timing/window logic уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
+В одном файле все еще смешаны SmartSync, level matching и финальная сборка аудио. Настройки, text cleanup/grouping, reference routing, timing/window logic и guards уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
 
 ### P1. Мало тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers и timing-window rules, но нет тестов на guards. После выделения конфигов эти участки стало проще тестировать отдельно.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules и guards. Следующий пробел - audio level/compression helpers и SmartSync acceptance edge cases.
 
 ### P1. Эксперименты не формализованы как воспроизводимый benchmark
 
@@ -373,7 +378,7 @@ speakers_xtts.pth
 - text cleanup/grouping - выполнено, `src/tts_text.py`;
 - reference routing - выполнено, `src/tts_routing.py`;
 - timing/window logic - выполнено, `src/tts_timing.py`;
-- tail/babble guards;
+- tail/babble guards - выполнено, `src/tts_guards.py`;
 - audio level/compression helpers.
 
 ### Этап 3. Репозиторная чистка
