@@ -104,11 +104,14 @@ data/output/<job-name>/
 
 - `src/tts.py`
   - XTTS synthesis orchestration.
-  - Reference routing.
   - Timing/window logic.
   - Cheap tail guard, babble guard, ASR retry.
   - Audio level matching, compression, peak ceiling.
   - Сериализация TTS-таймингов обратно в `translated_segments.json`.
+
+- `src/tts_routing.py`
+  - Оценка соответствия reference-клипа текущему сегменту.
+  - Выбор per-segment reference paths из `speaker_profile`.
 
 - `src/tts_text.py`
   - Text cleanup для TTS.
@@ -318,17 +321,18 @@ speakers_xtts.pth
 - быстрые тесты находятся в `tests/unit/`;
 - TTS runtime-настройки сгруппированы в dataclass-конфиги;
 - text cleanup/grouping вынесены из `src/tts.py` в `src/tts_text.py`;
+- reference routing вынесен из `src/tts.py` в `src/tts_routing.py`;
 - smoke-run на коротком видео был успешно пройден до предыдущего коммита.
 
 ## 7. Текущие инженерные риски
 
 ### P1. `src/tts.py` слишком крупный
 
-В одном файле все еще смешаны reference routing, timing, SmartSync, tail guards, ASR retry, level matching и финальная сборка аудио. Настройки уже сгруппированы в dataclass-конфиги, text cleanup/grouping вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
+В одном файле все еще смешаны timing, SmartSync, tail guards, ASR retry, level matching и финальная сборка аудио. Настройки, text cleanup/grouping и reference routing уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
 
 ### P1. Мало тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов и text/grouping helpers, но нет тестов на routing, timing-window правила и guards. После выделения конфигов эти участки стало проще тестировать отдельно.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers и routing helpers, но нет тестов на timing-window правила и guards. После выделения конфигов эти участки стало проще тестировать отдельно.
 
 ### P1. Эксперименты не формализованы как воспроизводимый benchmark
 
@@ -362,7 +366,7 @@ speakers_xtts.pth
 После dataclass-конфигов выносить блоки небольшими коммитами:
 
 - text cleanup/grouping - выполнено, `src/tts_text.py`;
-- reference routing;
+- reference routing - выполнено, `src/tts_routing.py`;
 - timing/window logic;
 - tail/babble guards;
 - audio level/compression helpers.
