@@ -88,6 +88,10 @@ data/output/<job-name>/
   - Профили: baseline, SmartSync on/off, segment matching on/off, babble guard on/off, XTTS conservative/expressive.
   - Для каждого профиля прогоняются `tts`, `postprocess`, `subtitles`, `metrics`; итог с метриками и TTS config snapshot пишется в `tts_benchmark_summary.md/.csv/.json`.
 
+- `.github/workflows/unit.yml`
+  - Быстрый CI-контур на push и pull request.
+  - Ставит `requirements-ci.txt`, создает локальный `config.py` из `config.example.py`, компилирует ключевые entrypoints и запускает `tests/unit`.
+
 ### Конфигурация
 
 - `config.example.py`
@@ -192,6 +196,9 @@ data/output/<job-name>/
 
 - `tests/unit/`
   - Быстрые unit-тесты для ASR metadata, pipeline paths, subtitles, TTS serialization и вынесенных TTS helpers.
+
+- `requirements-ci.txt`
+  - Минимальные зависимости для GitHub Actions unit-контура без тяжелого ML runtime-стека.
 
 ## 4. Контракты между шагами
 
@@ -359,6 +366,7 @@ speakers_xtts.pth
 - добавлен `python scripts/benchmark_tts_profiles.py`;
 - добавлен `run_report.md` после шага `metrics`;
 - добавлен snapshot TTS-настроек в `tts_config.json`, `metrics.json`, `run_report.md` и benchmark-сводки;
+- добавлен GitHub Actions unit-контур через `requirements-ci.txt`;
 - добавлен `--resume` и `--force-step` для пропуска уже готовых шагов;
 - подключен шаг `subtitles`;
 - введена структура `data/output/<job-name>/`;

@@ -273,6 +273,8 @@ python experiments\plot_translation_metrics.py --suffix smoke_20s
 python -m pytest tests/unit
 ```
 
+Для GitHub Actions используется минимальный набор зависимостей из `requirements-ci.txt`; тяжелый runtime-стек из `requirements.txt` не нужен для unit-контура.
+
 Smoke-check пайплайна:
 
 ```powershell

@@ -1,0 +1,6 @@
+pytest
+numpy
+scipy
+soundfile
+pydub
+tqdm
