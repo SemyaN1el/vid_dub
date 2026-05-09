@@ -514,6 +514,7 @@ def step_metrics(paths: dict, suffix: str) -> None:
     from src.metrics import (speaker_verification_score, compute_wer_cer,
                               compute_labse_similarity, print_metrics_summary,
                               plot_labse)
+    from src.reporting import write_run_report
 
     logger.info("╔══ ШАГ 7: МЕТРИКИ ══╗")
     check_file(paths["speaker_ref"],         "metrics")
@@ -570,9 +571,23 @@ def step_metrics(paths: dict, suffix: str) -> None:
     with open(paths["metrics_summary"], "w", encoding="utf-8") as f:
         json.dump(metrics_summary, f, ensure_ascii=False, indent=2)
 
+    run_mode = (
+        "test"
+        if os.path.abspath(paths["root_output"]) == os.path.abspath(cfg.TEST_OUTPUT_PATH)
+        else "production"
+    )
+    report_path = write_run_report(
+        paths=paths,
+        segments=segments,
+        translated_segments=translated,
+        metrics_summary=metrics_summary,
+        mode=run_mode,
+    )
+
     print_metrics_summary(spk_score, wer_cer, labse)
     plot_labse(labse, title=f"[{suffix}] Zero-Shot —")
     logger.info("Сводка метрик сохранена: %s", paths["metrics_summary"])
+    logger.info("Отчёт запуска сохранён: %s", report_path)
     logger.info("╚══ Метрики подсчитаны ══╝")
 
 

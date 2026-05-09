@@ -93,6 +93,7 @@ def validate_artifacts(
     _require_file(paths["final_mix"], "final_mix.wav", min_bytes=128)
     _require_file(paths["final_video"], "final_video.mp4", min_bytes=128)
     _require_file(paths["speaker_ref"], "speaker_ref.wav", min_bytes=128)
+    _require_file(paths["run_report"], "run_report.md")
 
     segments_path = _require_file(paths["segments"], "segments.json")
     translated_path = _require_file(

@@ -44,6 +44,7 @@ flowchart TD
     H --> S["metrics"]
     L --> S
     I --> S
+    S --> T["run_report.md"]
     N --> S
 ```
 
@@ -57,6 +58,7 @@ data/output/<job-name>/
   final_mix.wav
   final_video.mp4
   metrics.json
+  run_report.md
   subtitles/
   temp/
 ```
@@ -152,6 +154,10 @@ data/output/<job-name>/
   - Speaker verification через `resemblyzer`.
   - WER/CER через ASR + `jiwer`.
   - Семантическое сходство перевода через LaBSE.
+
+- `src/reporting.py`
+  - Генерация `run_report.md` после шага `metrics`.
+  - Сводка по сегментам, TTS grouping/guards, timing pressure, метрикам и артефактам.
 
 ### Утилиты
 
@@ -299,6 +305,7 @@ data/output/<job-name>/
 Выход:
 
 - `metrics.json`
+- `run_report.md`
 - печать сводки в stdout;
 - график LaBSE через matplotlib.
 
@@ -333,6 +340,7 @@ speakers_xtts.pth
 - добавлен `config.example.py`;
 - добавлен `python main.py --check-env`;
 - добавлен `python scripts/smoke_pipeline.py`;
+- добавлен `run_report.md` после шага `metrics`;
 - подключен шаг `subtitles`;
 - введена структура `data/output/<job-name>/`;
 - удалены tracked `__pycache__`;
@@ -355,7 +363,7 @@ speakers_xtts.pth
 
 ### P1. Мало тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, audio level/compression helpers и smoke artifact validation. Следующий пробел - SmartSync acceptance edge cases и регулярный прогон smoke-check перед значимыми изменениями.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, audio level/compression helpers, run reporting и smoke artifact validation. Следующий пробел - SmartSync acceptance edge cases и регулярный прогон smoke-check перед значимыми изменениями.
 
 ### P1. Эксперименты не формализованы как воспроизводимый benchmark
 

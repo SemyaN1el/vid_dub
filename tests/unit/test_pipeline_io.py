@@ -51,4 +51,5 @@ def test_build_pipeline_paths_uses_job_directory(tmp_path: Path) -> None:
 
     assert paths["job_name"] == "demo_job"
     assert Path(paths["segments"]).parts[-2:] == ("demo_job", "segments.json")
+    assert Path(paths["run_report"]).parts[-2:] == ("demo_job", "run_report.md")
     assert Path(paths["subtitles_dir"]).parts[-2:] == ("demo_job", "subtitles")

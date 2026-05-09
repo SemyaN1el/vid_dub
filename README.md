@@ -70,6 +70,7 @@ flowchart TD
 │   ├── tts_backends.py         # XTTS backend
 │   ├── postprocessing.py       # микширование и сборка видео
 │   ├── metrics.py              # LaBSE / WER / CER / speaker verification
+│   ├── reporting.py            # run_report.md по итогам запуска
 │   ├── subtitles.py            # генерация и встраивание субтитров
 │   └── finetune.py             # подготовка датасета для XTTS fine-tuning
 ├── scripts/
@@ -135,7 +136,7 @@ python main.py --video .\data\input\video.mp4 --job-name demo --step all
 python scripts\smoke_pipeline.py
 ```
 
-По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `metrics.json`, `translated_segments.json` и `subtitles_manifest.json`.
+По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `metrics.json`, `run_report.md`, `translated_segments.json` и `subtitles_manifest.json`.
 
 Чтобы только проверить уже готовые артефакты без повторного запуска:
 
@@ -194,6 +195,7 @@ data/output/<job-name>/
   final_mix.wav
   final_video.mp4
   metrics.json
+  run_report.md
   subtitles/
     subtitles.ass
     subtitles.srt
@@ -224,7 +226,7 @@ data/output/<job-name>/
 
 ## Оценка качества
 
-Шаг `metrics` сохраняет сводку в `metrics.json` и считает:
+Шаг `metrics` сохраняет сводку в `metrics.json`, генерирует человекочитаемый `run_report.md` и считает:
 
 - `LaBSE` - семантическую близость исходного и переведенного текста;
 - `WER` - разборчивость синтезированной речи на уровне слов;
@@ -234,6 +236,8 @@ data/output/<job-name>/
 ```powershell
 python main.py --step metrics --video .\data\input\video.mp4 --job-name demo
 ```
+
+`run_report.md` содержит краткий verdict, основные метрики, количество сегментов, события TTS grouping/guards, timing pressure и ссылки на ключевые артефакты запуска.
 
 ## Эксперименты и тесты
 

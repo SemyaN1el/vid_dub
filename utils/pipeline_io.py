@@ -122,6 +122,7 @@ def build_job_artifact_paths(job_name: str, base_root: str) -> Dict[str, str]:
             final_mix.wav
             final_video.mp4
             metrics.json
+            run_report.md
             temp/
                 original_extracted_audio.wav
                 speaker_ref.wav
@@ -153,6 +154,7 @@ def build_job_artifact_paths(job_name: str, base_root: str) -> Dict[str, str]:
         "final_mix":           os.path.join(job_dir, "final_mix.wav"),
         "final_video":         os.path.join(job_dir, "final_video.mp4"),
         "metrics_summary":     os.path.join(job_dir, "metrics.json"),
+        "run_report":          os.path.join(job_dir, "run_report.md"),
         "segments":            os.path.join(job_dir, "segments.json"),
         "translated_segments": os.path.join(job_dir, "translated_segments.json"),
         "audio_segments_dir":  os.path.join(temp_dir, "audio_segments"),
