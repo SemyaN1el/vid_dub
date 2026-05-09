@@ -365,7 +365,8 @@ speakers_xtts.pth
 - tail/babble guards вынесены из `src/tts.py` в `src/tts_guards.py`;
 - audio level/compression helpers вынесены из `src/tts.py` в `src/tts_audio.py`;
 - smoke-run на коротком видео был успешно пройден перед audio-refactor;
-- smoke-run формализован как отдельный скрипт с проверкой артефактов.
+- smoke-run формализован как отдельный скрипт с проверкой артефактов;
+- benchmark-инфраструктура TTS-профилей готова, baseline sanity-run пройден, полный прогон всех профилей отложен.
 
 ## 7. Текущие инженерные риски
 
@@ -377,9 +378,9 @@ speakers_xtts.pth
 
 Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, audio level/compression helpers, run reporting и smoke artifact validation. Следующий пробел - SmartSync acceptance edge cases и регулярный прогон smoke-check перед значимыми изменениями.
 
-### P1. Эксперименты не формализованы как воспроизводимый benchmark
+### P2. Полный benchmark TTS-профилей еще не собран
 
-Скрипты лежат в `experiments/`, но их входные данные и ожидаемые результаты пока не описаны как единый сценарий.
+Инфраструктура уже есть в `scripts/benchmark_tts_profiles.py`: общий prep job, одинаковые upstream-артефакты, профили настроек и сводки `md/csv/json`. Следующий шаг не архитектурный, а качественный: прогнать все профили на одном коротком видео, прослушать спорные варианты и выбрать recommended TTS-настройки.
 
 ### P2. Vendor-мусор в репозитории
 
@@ -422,6 +423,20 @@ speakers_xtts.pth
 - крупных локальных папок;
 - неиспользуемых черновиков, если они появятся в tracked-файлах.
 
+### Этап 4. Benchmark качества TTS
+
+Статус: инфраструктура выполнена, полный прогон отложен.
+
+- [x] Добавить `scripts/benchmark_tts_profiles.py`.
+- [x] Использовать один общий prep job для `preprocess`, `asr`, `translate`.
+- [x] Сравнивать `baseline`, SmartSync on/off, segment matching on/off, babble guard on/off и XTTS conservative/expressive.
+- [x] Писать итоговые `tts_benchmark_summary.md`, `tts_benchmark_summary.csv`, `tts_benchmark_summary.json`.
+- [x] Проверить инфраструктуру baseline sanity-run на `smoke_20s.mp4`.
+- [ ] Запустить полный benchmark всех профилей на `smoke_20s.mp4`.
+- [ ] Прослушать лучшие и худшие профили по таблице метрик.
+- [ ] Выбрать recommended TTS-профиль.
+- [ ] Зафиксировать выбранные значения в документации или `config.example.py`.
+
 ## 9. Практический вывод
 
-Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск, базовые тесты и отдельный smoke-check. Основные TTS helper-зоны вынесены из `src/tts.py`; дальше разумнее улучшать качество запусков, отчеты и UX пайплайна, а не продолжать дробление ради дробления.
+Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск, базовые тесты, отдельный smoke-check и инструмент сравнения TTS-профилей. Основные TTS helper-зоны вынесены из `src/tts.py`; дальше разумнее улучшать качество запусков, отчеты и UX пайплайна, а не продолжать дробление ради дробления.

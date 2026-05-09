@@ -298,6 +298,14 @@ data/test/<prefix>_summary/tts_benchmark_summary.json
 python scripts\benchmark_tts_profiles.py --list-profiles
 ```
 
+Быстрая проверка инфраструктуры без полного сравнения:
+
+```powershell
+python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --job-prefix smoke_tts_bench --profiles baseline
+```
+
+Полный прогон всех профилей нужен как отдельный quality pass перед изменением recommended TTS-настроек.
+
 ## Что уже реализовано в TTS-контуре
 
 - multi-reference `speaker profile` из того же видео;
