@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 try:
     import torch
@@ -782,6 +783,11 @@ if __name__ == "__main__":
         help="Показать эффективную конфигурацию запуска в JSON без запуска пайплайна"
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Проверить локальные пути, входное видео, модельные файлы, CLI и зависимости"
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -844,6 +850,17 @@ if __name__ == "__main__":
             indent=2,
         ))
         sys.exit(0)
+    if args.doctor:
+        from src.doctor import format_doctor_report, has_doctor_failures, run_project_doctor
+
+        checks = run_project_doctor(
+            config=cfg,
+            project_root=Path(__file__).resolve().parent,
+            video_path=args.video,
+            legacy_suffix=args.suffix,
+        )
+        print(format_doctor_report(checks))
+        sys.exit(1 if has_doctor_failures(checks) else 0)
 
     seed_everything(cfg.SEED)
 

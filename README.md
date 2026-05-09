@@ -134,13 +134,21 @@ python main.py --show-config --mt-model gemini-2.5-flash --mt-strategy per-segme
 
 Команда выводит JSON со runtime, paths, ASR, MT, metrics, subtitles и TTS-настройками. Значения API-ключей не печатаются, только имена env-переменных.
 
-7. Запустить полный пайплайн:
+7. Проверить локальную готовность проекта:
+
+```powershell
+python main.py --doctor --video .\data\input\video.mp4
+```
+
+`--doctor` проверяет `config.py`, входное видео, writable output/test директории, файлы XTTS-модели, `ffmpeg`/`demucs`, Python-зависимости и нужные API-key env-переменные. Если есть обязательные `FAIL`, команда завершается с ненулевым кодом.
+
+8. Запустить полный пайплайн:
 
 ```powershell
 python main.py --video .\data\input\video.mp4 --job-name demo --step all
 ```
 
-8. Продолжить запуск без пересчета готовых шагов:
+9. Продолжить запуск без пересчета готовых шагов:
 
 ```powershell
 python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume
@@ -152,7 +160,7 @@ python main.py --video .\data\input\video.mp4 --job-name demo --step all --resum
 python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume --force-step tts
 ```
 
-9. Проверить короткий test-mode smoke-run:
+10. Проверить короткий test-mode smoke-run:
 
 ```powershell
 python scripts\smoke_pipeline.py

@@ -34,6 +34,7 @@ jobs:
             scripts/smoke_pipeline.py \
             scripts/benchmark_tts_profiles.py \
             src/config_snapshot.py \
+            src/doctor.py \
             src/reporting.py
 
       - name: Check config output

@@ -76,6 +76,7 @@ data/output/<job-name>/
   - Построение путей через `utils/pipeline_io.py`.
   - Preflight-проверка окружения через `--check-env`.
   - Печать эффективной конфигурации через `--show-config` без запуска пайплайна.
+  - Диагностика локальной готовности проекта через `--doctor`.
   - Resume-режим через `--resume` и принудительный пересчет через `--force-step`.
   - Snapshot TTS-настроек в `tts_config.json` и `metrics.json` перед генерацией `run_report.md`.
 
@@ -175,6 +176,9 @@ data/output/<job-name>/
 - `src/config_snapshot.py`
   - Сериализация фактических TTS-настроек запуска для `tts_config.json`, `metrics.json`, `run_report.md` и benchmark-сводок.
   - Snapshot всей безопасной runtime-конфигурации для `python main.py --show-config`.
+
+- `src/doctor.py`
+  - Быстрая диагностика `config.py`, входного видео, writable output/test директорий, XTTS-файлов, CLI, Python-зависимостей и API-key env-переменных.
 
 ### Утилиты
 
@@ -365,6 +369,7 @@ speakers_xtts.pth
 - добавлен `config.example.py`;
 - добавлен `python main.py --check-env`;
 - добавлен `python main.py --show-config`;
+- добавлен `python main.py --doctor`;
 - добавлен `python scripts/smoke_pipeline.py`;
 - добавлен `python scripts/benchmark_tts_profiles.py`;
 - добавлен `run_report.md` после шага `metrics`;
