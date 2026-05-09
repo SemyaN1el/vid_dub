@@ -61,12 +61,19 @@ flowchart TD
 │   ├── asr.py                  # ASR, сегментация, speaker profile
 │   ├── asr_backend.py          # local/Groq ASR backend
 │   ├── translation.py          # NLLB / Gemini и стратегии перевода
-│   ├── tts.py                  # XTTS, тайминг, routing, guards
+│   ├── tts.py                  # XTTS orchestration
+│   ├── tts_audio.py            # level matching, compression, peak ceiling
+│   ├── tts_guards.py           # tail/babble guards
+│   ├── tts_routing.py          # reference routing
+│   ├── tts_text.py             # cleanup/grouping
+│   ├── tts_timing.py           # timing windows
 │   ├── tts_backends.py         # XTTS backend
 │   ├── postprocessing.py       # микширование и сборка видео
 │   ├── metrics.py              # LaBSE / WER / CER / speaker verification
 │   ├── subtitles.py            # генерация и встраивание субтитров
 │   └── finetune.py             # подготовка датасета для XTTS fine-tuning
+├── scripts/
+│   └── smoke_pipeline.py       # test-mode smoke-run + artifact validation
 ├── utils/
 │   ├── helpers.py
 │   └── pipeline_io.py          # job_name и пути артефактов
@@ -120,6 +127,20 @@ python main.py --check-env
 
 ```powershell
 python main.py --video .\data\input\video.mp4 --job-name demo --step all
+```
+
+7. Проверить короткий test-mode smoke-run:
+
+```powershell
+python scripts\smoke_pipeline.py
+```
+
+По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `metrics.json`, `translated_segments.json` и `subtitles_manifest.json`.
+
+Чтобы только проверить уже готовые артефакты без повторного запуска:
+
+```powershell
+python scripts\smoke_pipeline.py --job-name smoke_pipeline --skip-run
 ```
 
 ## Основные команды
@@ -230,6 +251,12 @@ python experiments\plot_translation_metrics.py --suffix smoke_20s
 
 ```powershell
 python -m pytest tests/unit
+```
+
+Smoke-check пайплайна:
+
+```powershell
+python scripts\smoke_pipeline.py --video .\data\input\smoke_20s.mp4 --job-name smoke_pipeline
 ```
 
 ## Что уже реализовано в TTS-контуре

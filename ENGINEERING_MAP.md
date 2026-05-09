@@ -73,6 +73,11 @@ data/output/<job-name>/
   - Построение путей через `utils/pipeline_io.py`.
   - Preflight-проверка окружения через `--check-env`.
 
+- `scripts/smoke_pipeline.py`
+  - Запуск короткого `--test` smoke-run через `main.py --step all`.
+  - Валидация ключевых артефактов, JSON-контрактов, subtitle manifest и метрик.
+  - Режим `--skip-run` для быстрой проверки уже готовой папки `data/test/<job-name>/`.
+
 ### Конфигурация
 
 - `config.example.py`
@@ -327,6 +332,7 @@ speakers_xtts.pth
 - добавлен `requirements.txt`;
 - добавлен `config.example.py`;
 - добавлен `python main.py --check-env`;
+- добавлен `python scripts/smoke_pipeline.py`;
 - подключен шаг `subtitles`;
 - введена структура `data/output/<job-name>/`;
 - удалены tracked `__pycache__`;
@@ -338,7 +344,8 @@ speakers_xtts.pth
 - timing/window logic вынесена из `src/tts.py` в `src/tts_timing.py`;
 - tail/babble guards вынесены из `src/tts.py` в `src/tts_guards.py`;
 - audio level/compression helpers вынесены из `src/tts.py` в `src/tts_audio.py`;
-- smoke-run на коротком видео был успешно пройден перед audio-refactor.
+- smoke-run на коротком видео был успешно пройден перед audio-refactor;
+- smoke-run формализован как отдельный скрипт с проверкой артефактов.
 
 ## 7. Текущие инженерные риски
 
@@ -348,7 +355,7 @@ speakers_xtts.pth
 
 ### P1. Мало тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards и audio level/compression helpers. Следующий пробел - SmartSync acceptance edge cases и более формальный smoke-сценарий.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, audio level/compression helpers и smoke artifact validation. Следующий пробел - SmartSync acceptance edge cases и регулярный прогон smoke-check перед значимыми изменениями.
 
 ### P1. Эксперименты не формализованы как воспроизводимый benchmark
 
@@ -397,4 +404,4 @@ speakers_xtts.pth
 
 ## 9. Практический вывод
 
-Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск и базовые тесты. Основные TTS helper-зоны вынесены из `src/tts.py`; следующий полезный этап - аккуратно отделить SmartSync/TTS retry orchestration или формализовать smoke-run как повторяемую проверку.
+Проект уже имеет рабочее ядро дубляжа, воспроизводимый запуск, базовые тесты и отдельный smoke-check. Основные TTS helper-зоны вынесены из `src/tts.py`; дальше разумнее улучшать качество запусков, отчеты и UX пайплайна, а не продолжать дробление ради дробления.
