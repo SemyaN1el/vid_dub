@@ -14,6 +14,12 @@ from pydub.silence import detect_nonsilent
 from tqdm.auto import tqdm
 from src.translation import load_smart_sync_backend, smart_sync_rewrite_segment_text
 from src.tts_routing import _select_segment_references
+from src.tts_timing import (
+    _edge_silence_ms,
+    _timing_speech_stats,
+    build_segment_timing_window,
+    update_next_segment_start,
+)
 from src.tts_text import (
     _build_tts_retry_text_variants,
     _clean_text,
@@ -224,88 +230,6 @@ def _compute_short_segment_tail_trim_ms(
         return 0
 
     return trim_ms
-
-
-def _edge_silence_ms(
-    audio: AudioSegment,
-    min_silence_len: int = 30,
-    silence_margin_db: float = 18.0
-) -> Dict[str, int]:
-    """Оценивает тишину по краям сегмента, чтобы не срезать живую речь."""
-    if len(audio) == 0:
-        return {"leading": 0, "trailing": 0}
-
-    silence_threshold = max(-50.0, audio.dBFS - silence_margin_db)
-    ranges = detect_nonsilent(
-        audio,
-        min_silence_len=min_silence_len,
-        silence_thresh=silence_threshold,
-        seek_step=2
-    )
-    if not ranges:
-        return {"leading": len(audio), "trailing": len(audio)}
-
-    leading_ms = max(0, int(ranges[0][0]))
-    trailing_ms = max(0, int(len(audio) - ranges[-1][1]))
-    return {"leading": leading_ms, "trailing": trailing_ms}
-
-
-def _timing_speech_stats(
-    audio: AudioSegment,
-    keep_edge_ms: int = 60,
-) -> Dict[str, int]:
-    """
-    Оценивает «реальную» речевую длительность для тайминга, не наказывая
-    сегмент за длинные стартовые/хвостовые паузы XTTS.
-    """
-    if len(audio) == 0:
-        return {
-            "effective_duration_ms": 0,
-            "leading_silence_ms": 0,
-            "trailing_silence_ms": 0,
-        }
-
-    edge = _edge_silence_ms(audio)
-    effective_duration_ms = max(
-        0,
-        len(audio)
-        - max(0, edge["leading"] - keep_edge_ms)
-        - max(0, edge["trailing"] - keep_edge_ms)
-    )
-    return {
-        "effective_duration_ms": int(effective_duration_ms),
-        "leading_silence_ms": int(edge["leading"]),
-        "trailing_silence_ms": int(edge["trailing"]),
-    }
-
-
-def _allocate_timing_extension_ms(
-    needed_extension_ms: int,
-    available_before_ms: int,
-    available_after_ms: int,
-) -> Tuple[int, int]:
-    """Распределяет дополнительное окно слева/справа максимально симметрично."""
-    if needed_extension_ms <= 0:
-        return 0, 0
-
-    total_available_ms = max(0, available_before_ms) + max(0, available_after_ms)
-    if total_available_ms <= 0:
-        return 0, 0
-
-    target_extension_ms = min(needed_extension_ms, total_available_ms)
-    half_needed_ms = target_extension_ms / 2.0
-
-    if half_needed_ms <= available_before_ms and half_needed_ms <= available_after_ms:
-        return int(round(half_needed_ms)), int(round(half_needed_ms))
-
-    if available_before_ms < half_needed_ms:
-        borrow_before_ms = max(0, available_before_ms)
-        borrow_after_ms = min(target_extension_ms - borrow_before_ms, max(0, available_after_ms))
-        return int(round(borrow_before_ms)), int(round(borrow_after_ms))
-
-    borrow_after_ms = max(0, available_after_ms)
-    borrow_before_ms = min(target_extension_ms - borrow_after_ms, max(0, available_before_ms))
-    return int(round(borrow_before_ms)), int(round(borrow_after_ms))
 
 
 def _compute_safe_tail_trim_ms(
@@ -1297,86 +1221,37 @@ def synthesize_segments_with_timing(
         seg_audio       = AudioSegment.from_wav(seg_path)
         generated_ms    = len(seg_audio)
 
-        window_start_val = float(seg.get("start", orig_start))
-        window_end_val   = float(seg.get("end", window_start_val + 1.0))
-        if window_start_val > window_end_val:
-            window_start_val, window_end_val = window_end_val, window_start_val
-
-        original_ms = int((window_end_val - window_start_val) * 1000)
         timing_stats = _timing_speech_stats(seg_audio)
         timing_duration_ms = max(1, timing_stats["effective_duration_ms"] or generated_ms)
         seg["timing_effective_duration_ms"] = timing_duration_ms
         seg["timing_leading_silence_ms"] = timing_stats["leading_silence_ms"]
         seg["timing_trailing_silence_ms"] = timing_stats["trailing_silence_ms"]
 
-        available_before_ms = max(
-            0,
-            int(
-                (
-                    window_start_val
-                    - (prev_end_sec + min_pause_between_segments)
-                ) * 1000
-            )
+        timing_window = build_segment_timing_window(
+            segments=segments,
+            index=i,
+            original_start_sec=orig_start,
+            prev_end_sec=prev_end_sec,
+            timing_duration_ms=timing_duration_ms,
+            min_pause_between_segments=min_pause_between_segments,
+            max_shift_left_seconds=max_shift_left_seconds,
+            max_next_start_shift_sec=max_next_start_shift_sec,
         )
-        available_before_ms = min(
-            available_before_ms,
-            max(0, int(max_shift_left_seconds * 1000))
-        )
-
-        available_after_ms = 0
-        if i < len(segments) - 1:
-            next_segment = segments[i + 1]
-            next_current_start = float(next_segment.get("start", next_segment.get("original_start", 0.0)))
-            gap_after_ms = max(
-                0,
-                int(
-                    (
-                        next_current_start
-                        - window_end_val
-                        - min_pause_between_segments
-                    ) * 1000
-                )
-            )
-            available_after_ms = gap_after_ms
-            if max_next_start_shift_sec is not None:
-                next_original_start = float(
-                    next_segment.setdefault("original_start", next_segment.get("start", next_current_start))
-                )
-                max_allowed_next_start = next_original_start + max_next_start_shift_sec
-                available_after_ms += max(
-                    0,
-                    int((max_allowed_next_start - next_current_start) * 1000)
-                )
-
-        borrowed_before_ms = 0
-        borrowed_after_ms = 0
-        needed_extension_ms = max(0, timing_duration_ms - original_ms)
-        total_borrowable_ms = available_before_ms + available_after_ms
-        if (
-            needed_extension_ms > 0
-            and total_borrowable_ms >= max(120, int(needed_extension_ms * 0.5))
-        ):
-            borrowed_before_ms, borrowed_after_ms = _allocate_timing_extension_ms(
-                needed_extension_ms=needed_extension_ms,
-                available_before_ms=available_before_ms,
-                available_after_ms=available_after_ms,
-            )
-            if borrowed_before_ms or borrowed_after_ms:
-                cur_start = max(
-                    prev_end_sec + min_pause_between_segments,
-                    window_start_val - borrowed_before_ms / 1000.0,
-                )
-                cur_start_ms = int(round(cur_start * 1000))
+        window_start_val = timing_window.window_start_sec
+        window_end_val = timing_window.window_end_sec
+        cur_start = timing_window.cur_start_sec
+        cur_start_ms = timing_window.cur_start_ms
+        original_ms = timing_window.original_ms
+        borrowed_before_ms = timing_window.borrowed_before_ms
+        borrowed_after_ms = timing_window.borrowed_after_ms
+        available_ms = timing_window.available_ms
 
         seg["start"] = cur_start
         seg["timing_borrow_before_ms"] = borrowed_before_ms
         seg["timing_borrow_after_ms"] = borrowed_after_ms
-        seg["timing_window_start_sec"] = round(cur_start, 3)
-        seg["timing_window_end_sec"] = round(
-            window_end_val + borrowed_after_ms / 1000.0,
-            3
-        )
-        seg["timing_window_ms"] = available_ms = max(100, original_ms + borrowed_before_ms + borrowed_after_ms)
+        seg["timing_window_start_sec"] = timing_window.timing_window_start_sec
+        seg["timing_window_end_sec"] = timing_window.timing_window_end_sec
+        seg["timing_window_ms"] = available_ms
 
         if borrowed_before_ms or borrowed_after_ms:
             logger.info(
@@ -1866,17 +1741,12 @@ def synthesize_segments_with_timing(
         seg["corrected_duration_sec"] = corrected_ms / 1000.0
         prev_end_sec = actual_end
 
-        # Обновляем начало следующего сегмента (только вправо)
-        if i < len(segments) - 1:
-            nxt = segments[i + 1]
-            next_original_start = nxt.setdefault("original_start", nxt["start"])
-            next_start_floor = nxt["start"]
-            if max_next_start_shift_sec is None:
-                nxt["start"] = max(actual_end, next_start_floor)
-            else:
-                max_allowed_start = next_original_start + max_next_start_shift_sec
-                bounded_actual_end = min(actual_end, max_allowed_start)
-                nxt["start"] = max(next_start_floor, bounded_actual_end)
+        update_next_segment_start(
+            segments=segments,
+            index=i,
+            actual_end_sec=actual_end,
+            max_next_start_shift_sec=max_next_start_shift_sec,
+        )
 
     # Кроссфейды между соседними сегментами
     for i in range(len(segments) - 1):
