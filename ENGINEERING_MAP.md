@@ -381,9 +381,9 @@ speakers_xtts.pth
 
 В одном файле все еще смешаны SmartSync, TTS retry и финальная сборка аудио. Настройки, text cleanup/grouping, reference routing, timing/window logic, guards и audio helpers уже вынесены отдельно, поэтому следующий безопасный шаг - продолжать дробление по зонам ответственности небольшими коммитами.
 
-### P1. Мало тестов вокруг TTS-контрактов
+### P1. Мало интеграционных тестов вокруг TTS-контрактов
 
-Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, audio level/compression helpers, run reporting и smoke artifact validation. Следующий пробел - SmartSync acceptance edge cases и регулярный прогон smoke-check перед значимыми изменениями.
+Есть тесты сериализации TTS-сегментов, text/grouping helpers, routing helpers, timing-window rules, guards, SmartSync acceptance gate, audio level/compression helpers, run reporting и smoke artifact validation. Следующий пробел - регулярный прогон smoke-check перед значимыми изменениями и интеграционные TTS-сценарии на коротком видео.
 
 ### P2. Полный benchmark TTS-профилей еще не собран
 
@@ -443,6 +443,18 @@ speakers_xtts.pth
 - [ ] Прослушать лучшие и худшие профили по таблице метрик.
 - [ ] Выбрать recommended TTS-профиль.
 - [ ] Зафиксировать выбранные значения в документации или `config.example.py`.
+
+### Этап 5. SmartSync safety tests
+
+Статус: базовый acceptance-контур покрыт unit-тестами.
+
+- [x] Проверить objective для `shorter` mode через `_smart_sync_distance_ms`.
+- [x] Проверить acceptance rewrite при сохраненном смысле и хорошем ASR.
+- [x] Проверить reject по низкому text similarity.
+- [x] Проверить reject по низкому ASR score.
+- [x] Проверить reject по сильному ASR drop от baseline.
+- [x] Проверить reject по extra tail и missing suffix.
+- [ ] Добавить интеграционный smoke-сценарий, где SmartSync реально срабатывает на коротком видео.
 
 ## 9. Практический вывод
 
