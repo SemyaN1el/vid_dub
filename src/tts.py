@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import subprocess
+from dataclasses import dataclass
 from copy import deepcopy
 from difflib import SequenceMatcher
 from tempfile import NamedTemporaryFile
@@ -15,6 +16,103 @@ from tqdm.auto import tqdm
 from src.translation import load_smart_sync_backend, smart_sync_rewrite_segment_text
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TTSRuntimeConfig:
+    max_speedup_factor: float = 1.2
+    max_next_start_shift_sec: float | None = None
+    speedup_tail_padding_ms: int = 120
+    min_pause_between_segments: float = 0.2
+    fade_in_out_ms: int = 50
+    crossfade_ms: int = 30
+    max_shift_left_seconds: float = 0.5
+    enable_grouping: bool = True
+    grouping_max_gap_sec: float = 0.6
+    grouping_max_segments: int = 2
+    grouping_max_chars: int = 220
+    grouping_max_duration_sec: float = 8.5
+
+
+@dataclass(frozen=True)
+class SmartSyncConfig:
+    enabled: bool = False
+    device: str = "cpu"
+    src_lang: str = "eng_Latn"
+    tgt_lang: str = "rus_Cyrl"
+    max_rewrites: int = 1
+    trigger_speed_factor: float = 1.08
+    min_fill_ratio: float = 0.82
+    min_improvement_ms: int = 180
+    allow_lengthen: bool = True
+    accept_min_fill_ratio: float = 0.72
+    accept_min_text_similarity: float = 0.42
+    accept_min_word_ratio: float = 0.58
+    accept_min_token_precision: float = 0.62
+    accept_min_asr_score: float = 0.86
+    accept_max_asr_drop: float = 0.05
+
+
+@dataclass(frozen=True)
+class TailGuardConfig:
+    enable_cheap_tail_guard: bool = True
+    cheap_tail_guard_max_segment_sec: float = 3.2
+    cheap_tail_guard_min_overhang_ms: int = 180
+    cheap_tail_guard_min_gap_ms: int = 80
+    cheap_tail_guard_min_island_ms: int = 80
+    cheap_tail_guard_max_island_ms: int = 450
+    cheap_tail_guard_search_window_ms: int = 900
+    cheap_tail_guard_max_trim_ms: int = 700
+    enable_babble_guard: bool = False
+    babble_guard_model_name: str = "small"
+    babble_guard_device: str = "cpu"
+    babble_guard_max_segment_sec: float = 4.0
+    babble_guard_min_gap_ms: int = 80
+    babble_guard_min_island_ms: int = 80
+    babble_guard_max_island_ms: int = 450
+    babble_guard_search_window_ms: int = 900
+    babble_guard_max_trim_ms: int = 700
+    babble_guard_anchor_words: int = 2
+    babble_guard_min_score_gain: float = 0.08
+    enable_asr_retry: bool = False
+    asr_retry_model_name: str = "tiny"
+    asr_retry_device: str = "cpu"
+    asr_retry_max_segment_sec: float = 2.5
+    asr_retry_attempts: int = 4
+    asr_retry_min_score: float = 0.9
+    enable_short_segment_tail_trim: bool = False
+    short_segment_tail_trim_min_overhang_ms: int = 280
+    short_segment_tail_trim_max_ms: int = 500
+    short_segment_tail_trim_max_ratio: float = 0.22
+
+
+@dataclass(frozen=True)
+class SegmentRoutingConfig:
+    enabled: bool = False
+    short_segment_sec: float = 2.2
+    max_refs_per_segment: int = 2
+    min_segment_sec: float = 0.9
+    min_segment_words: int = 3
+    confidence_margin: float = 0.45
+
+
+@dataclass(frozen=True)
+class AudioLevelConfig:
+    threshold_compression: float = -15.0
+    ratio_compression: float = 2.0
+    attack_compression: int = 25
+    release_compression: int = 50
+    target_dbfs: float = -15.0
+    reference_gain_offset_db: float = 3.0
+    max_segment_boost_db: float = 6.0
+    max_segment_cut_db: float = 12.0
+    peak_ceiling_dbfs: float = -2.0
+    enable_final_compression: bool = False
+    enable_segment_matching: bool = False
+    segment_match_padding_ms: int = 120
+    segment_match_strength: float = 0.7
+    segment_match_max_delta_db: float = 4.0
+    segment_match_min_active_ratio: float = 0.35
 
 
 def _clean_text(text: str) -> str:
@@ -1324,83 +1422,11 @@ def synthesize_segments_with_timing(
     reference_audio_path: str | None = None,
     source_vocals_path: str | None = None,
     segments_dir: str = "./data/output/temp/audio_segments",
-    max_speedup_factor: float = 1.2,
-    max_next_start_shift_sec: float | None = None,
-    speedup_tail_padding_ms: int = 120,
-    min_pause_between_segments: float = 0.2,
-    fade_in_out_ms: int = 50,
-    crossfade_ms: int = 30,
-    max_shift_left_seconds: float = 0.5,
-    enable_smart_sync: bool = False,
-    smart_sync_device: str = "cpu",
-    smart_sync_src_lang: str = "eng_Latn",
-    smart_sync_tgt_lang: str = "rus_Cyrl",
-    smart_sync_max_rewrites: int = 1,
-    smart_sync_trigger_speed_factor: float = 1.08,
-    smart_sync_min_fill_ratio: float = 0.82,
-    smart_sync_min_improvement_ms: int = 180,
-    smart_sync_allow_lengthen: bool = True,
-    smart_sync_accept_min_fill_ratio: float = 0.72,
-    smart_sync_accept_min_text_similarity: float = 0.42,
-    smart_sync_accept_min_word_ratio: float = 0.58,
-    smart_sync_accept_min_token_precision: float = 0.62,
-    smart_sync_accept_min_asr_score: float = 0.86,
-    smart_sync_accept_max_asr_drop: float = 0.05,
-    threshold_compression: float = -15.0,
-    ratio_compression: float = 2.0,
-    attack_compression: int = 25,
-    release_compression: int = 50,
-    target_dBFS: float = -15.0,
-    reference_gain_offset_db: float = 3.0,
-    max_segment_boost_db: float = 6.0,
-    max_segment_cut_db: float = 12.0,
-    peak_ceiling_dbfs: float = -2.0,
-    enable_final_compression: bool = False,
-    enable_segment_routing: bool = False,
-    short_segment_sec: float = 2.2,
-    max_refs_per_segment: int = 2,
-    min_segment_routing_sec: float = 0.9,
-    min_segment_routing_words: int = 3,
-    routing_confidence_margin: float = 0.45,
-    enable_tts_grouping: bool = True,
-    tts_grouping_max_gap_sec: float = 0.6,
-    tts_grouping_max_segments: int = 2,
-    tts_grouping_max_chars: int = 220,
-    tts_grouping_max_duration_sec: float = 8.5,
-    enable_tts_cheap_tail_guard: bool = True,
-    tts_cheap_tail_guard_max_segment_sec: float = 3.2,
-    tts_cheap_tail_guard_min_overhang_ms: int = 180,
-    tts_cheap_tail_guard_min_gap_ms: int = 80,
-    tts_cheap_tail_guard_min_island_ms: int = 80,
-    tts_cheap_tail_guard_max_island_ms: int = 450,
-    tts_cheap_tail_guard_search_window_ms: int = 900,
-    tts_cheap_tail_guard_max_trim_ms: int = 700,
-    enable_tts_babble_guard: bool = False,
-    tts_babble_guard_model_name: str = "small",
-    tts_babble_guard_device: str = "cpu",
-    tts_babble_guard_max_segment_sec: float = 4.0,
-    tts_babble_guard_min_gap_ms: int = 80,
-    tts_babble_guard_min_island_ms: int = 80,
-    tts_babble_guard_max_island_ms: int = 450,
-    tts_babble_guard_search_window_ms: int = 900,
-    tts_babble_guard_max_trim_ms: int = 700,
-    tts_babble_guard_anchor_words: int = 2,
-    tts_babble_guard_min_score_gain: float = 0.08,
-    enable_tts_asr_retry: bool = False,
-    tts_asr_retry_model_name: str = "tiny",
-    tts_asr_retry_device: str = "cpu",
-    tts_asr_retry_max_segment_sec: float = 2.5,
-    tts_asr_retry_attempts: int = 4,
-    tts_asr_retry_min_score: float = 0.9,
-    enable_short_segment_tail_trim: bool = False,
-    short_segment_tail_trim_min_overhang_ms: int = 280,
-    short_segment_tail_trim_max_ms: int = 500,
-    short_segment_tail_trim_max_ratio: float = 0.22,
-    enable_segment_matching: bool = False,
-    segment_match_padding_ms: int = 120,
-    segment_match_strength: float = 0.7,
-    segment_match_max_delta_db: float = 4.0,
-    segment_match_min_active_ratio: float = 0.35
+    runtime_config: TTSRuntimeConfig | None = None,
+    smart_sync_config: SmartSyncConfig | None = None,
+    tail_guard_config: TailGuardConfig | None = None,
+    segment_routing_config: SegmentRoutingConfig | None = None,
+    audio_level_config: AudioLevelConfig | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Синтезирует дубляж с временно́й синхронизацией сегментов.
@@ -1413,6 +1439,94 @@ def synthesize_segments_with_timing(
         4. Применяет fade-in/out и кроссфейды между соседними сегментами.
         5. Нормализует итоговое аудио.
     """
+    runtime_config = runtime_config or TTSRuntimeConfig()
+    smart_sync_config = smart_sync_config or SmartSyncConfig()
+    tail_guard_config = tail_guard_config or TailGuardConfig()
+    segment_routing_config = segment_routing_config or SegmentRoutingConfig()
+    audio_level_config = audio_level_config or AudioLevelConfig()
+
+    max_speedup_factor = runtime_config.max_speedup_factor
+    max_next_start_shift_sec = runtime_config.max_next_start_shift_sec
+    speedup_tail_padding_ms = runtime_config.speedup_tail_padding_ms
+    min_pause_between_segments = runtime_config.min_pause_between_segments
+    fade_in_out_ms = runtime_config.fade_in_out_ms
+    crossfade_ms = runtime_config.crossfade_ms
+    max_shift_left_seconds = runtime_config.max_shift_left_seconds
+    enable_tts_grouping = runtime_config.enable_grouping
+    tts_grouping_max_gap_sec = runtime_config.grouping_max_gap_sec
+    tts_grouping_max_segments = runtime_config.grouping_max_segments
+    tts_grouping_max_chars = runtime_config.grouping_max_chars
+    tts_grouping_max_duration_sec = runtime_config.grouping_max_duration_sec
+
+    enable_smart_sync = smart_sync_config.enabled
+    smart_sync_device = smart_sync_config.device
+    smart_sync_src_lang = smart_sync_config.src_lang
+    smart_sync_tgt_lang = smart_sync_config.tgt_lang
+    smart_sync_max_rewrites = smart_sync_config.max_rewrites
+    smart_sync_trigger_speed_factor = smart_sync_config.trigger_speed_factor
+    smart_sync_min_fill_ratio = smart_sync_config.min_fill_ratio
+    smart_sync_min_improvement_ms = smart_sync_config.min_improvement_ms
+    smart_sync_allow_lengthen = smart_sync_config.allow_lengthen
+    smart_sync_accept_min_fill_ratio = smart_sync_config.accept_min_fill_ratio
+    smart_sync_accept_min_text_similarity = smart_sync_config.accept_min_text_similarity
+    smart_sync_accept_min_word_ratio = smart_sync_config.accept_min_word_ratio
+    smart_sync_accept_min_token_precision = smart_sync_config.accept_min_token_precision
+    smart_sync_accept_min_asr_score = smart_sync_config.accept_min_asr_score
+    smart_sync_accept_max_asr_drop = smart_sync_config.accept_max_asr_drop
+
+    enable_tts_cheap_tail_guard = tail_guard_config.enable_cheap_tail_guard
+    tts_cheap_tail_guard_max_segment_sec = tail_guard_config.cheap_tail_guard_max_segment_sec
+    tts_cheap_tail_guard_min_overhang_ms = tail_guard_config.cheap_tail_guard_min_overhang_ms
+    tts_cheap_tail_guard_min_gap_ms = tail_guard_config.cheap_tail_guard_min_gap_ms
+    tts_cheap_tail_guard_min_island_ms = tail_guard_config.cheap_tail_guard_min_island_ms
+    tts_cheap_tail_guard_max_island_ms = tail_guard_config.cheap_tail_guard_max_island_ms
+    tts_cheap_tail_guard_search_window_ms = tail_guard_config.cheap_tail_guard_search_window_ms
+    tts_cheap_tail_guard_max_trim_ms = tail_guard_config.cheap_tail_guard_max_trim_ms
+    enable_tts_babble_guard = tail_guard_config.enable_babble_guard
+    tts_babble_guard_model_name = tail_guard_config.babble_guard_model_name
+    tts_babble_guard_device = tail_guard_config.babble_guard_device
+    tts_babble_guard_max_segment_sec = tail_guard_config.babble_guard_max_segment_sec
+    tts_babble_guard_min_gap_ms = tail_guard_config.babble_guard_min_gap_ms
+    tts_babble_guard_min_island_ms = tail_guard_config.babble_guard_min_island_ms
+    tts_babble_guard_max_island_ms = tail_guard_config.babble_guard_max_island_ms
+    tts_babble_guard_search_window_ms = tail_guard_config.babble_guard_search_window_ms
+    tts_babble_guard_max_trim_ms = tail_guard_config.babble_guard_max_trim_ms
+    tts_babble_guard_anchor_words = tail_guard_config.babble_guard_anchor_words
+    tts_babble_guard_min_score_gain = tail_guard_config.babble_guard_min_score_gain
+    enable_tts_asr_retry = tail_guard_config.enable_asr_retry
+    tts_asr_retry_model_name = tail_guard_config.asr_retry_model_name
+    tts_asr_retry_device = tail_guard_config.asr_retry_device
+    tts_asr_retry_max_segment_sec = tail_guard_config.asr_retry_max_segment_sec
+    tts_asr_retry_attempts = tail_guard_config.asr_retry_attempts
+    tts_asr_retry_min_score = tail_guard_config.asr_retry_min_score
+    enable_short_segment_tail_trim = tail_guard_config.enable_short_segment_tail_trim
+    short_segment_tail_trim_min_overhang_ms = tail_guard_config.short_segment_tail_trim_min_overhang_ms
+    short_segment_tail_trim_max_ms = tail_guard_config.short_segment_tail_trim_max_ms
+    short_segment_tail_trim_max_ratio = tail_guard_config.short_segment_tail_trim_max_ratio
+
+    enable_segment_routing = segment_routing_config.enabled
+    short_segment_sec = segment_routing_config.short_segment_sec
+    max_refs_per_segment = segment_routing_config.max_refs_per_segment
+    min_segment_routing_sec = segment_routing_config.min_segment_sec
+    min_segment_routing_words = segment_routing_config.min_segment_words
+    routing_confidence_margin = segment_routing_config.confidence_margin
+
+    threshold_compression = audio_level_config.threshold_compression
+    ratio_compression = audio_level_config.ratio_compression
+    attack_compression = audio_level_config.attack_compression
+    release_compression = audio_level_config.release_compression
+    target_dBFS = audio_level_config.target_dbfs
+    reference_gain_offset_db = audio_level_config.reference_gain_offset_db
+    max_segment_boost_db = audio_level_config.max_segment_boost_db
+    max_segment_cut_db = audio_level_config.max_segment_cut_db
+    peak_ceiling_dbfs = audio_level_config.peak_ceiling_dbfs
+    enable_final_compression = audio_level_config.enable_final_compression
+    enable_segment_matching = audio_level_config.enable_segment_matching
+    segment_match_padding_ms = audio_level_config.segment_match_padding_ms
+    segment_match_strength = audio_level_config.segment_match_strength
+    segment_match_max_delta_db = audio_level_config.segment_match_max_delta_db
+    segment_match_min_active_ratio = audio_level_config.segment_match_min_active_ratio
+
     os.makedirs(segments_dir, exist_ok=True)
     os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
 
