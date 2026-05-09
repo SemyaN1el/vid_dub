@@ -74,8 +74,18 @@ def test_rewrite_speaker_profile_paths_moves_refs_to_profile_job(tmp_path: Path)
 
     assert rewritten["merged_reference_path"] == str(Path(profile_paths["speaker_ref"]).resolve())
     assert rewritten["reference_audio_path"] == str(Path(profile_paths["vocals"]).resolve())
-    assert rewritten["clips"][0]["path"].endswith("bench_baseline\\temp\\speaker_refs\\ref_00.wav")
-    assert rewritten["routing_clips"][0]["path"].endswith("bench_baseline\\temp\\speaker_refs\\route_ref_00.wav")
+    assert Path(rewritten["clips"][0]["path"]).parts[-4:] == (
+        "bench_baseline",
+        "temp",
+        "speaker_refs",
+        "ref_00.wav",
+    )
+    assert Path(rewritten["routing_clips"][0]["path"]).parts[-4:] == (
+        "bench_baseline",
+        "temp",
+        "speaker_refs",
+        "route_ref_00.wav",
+    )
 
 
 def test_collect_profile_result_reads_metrics_and_tts_summary(tmp_path: Path) -> None:
