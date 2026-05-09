@@ -74,6 +74,7 @@ data/output/<job-name>/
   - Разрешение входного видео через `--video`, legacy `--suffix` или единственное видео в `data/input/`.
   - Построение путей через `utils/pipeline_io.py`.
   - Preflight-проверка окружения через `--check-env`.
+  - Resume-режим через `--resume` и принудительный пересчет через `--force-step`.
 
 - `scripts/smoke_pipeline.py`
   - Запуск короткого `--test` smoke-run через `main.py --step all`.
@@ -165,6 +166,10 @@ data/output/<job-name>/
   - `job_name` normalization.
   - Поиск входных видео.
   - Сборка путей `data/output/<job-name>/` и `data/test/<job-name>/`.
+
+- `utils/pipeline_resume.py`
+  - Контракты готовности артефактов для `--resume`.
+  - Проверка JSON-артефактов, аудио/видео файлов и subtitle manifest.
 
 - `utils/helpers.py`
   - Seed, управление директориями, очистка GPU-памяти, нормализация путей.
@@ -341,6 +346,7 @@ speakers_xtts.pth
 - добавлен `python main.py --check-env`;
 - добавлен `python scripts/smoke_pipeline.py`;
 - добавлен `run_report.md` после шага `metrics`;
+- добавлен `--resume` и `--force-step` для пропуска уже готовых шагов;
 - подключен шаг `subtitles`;
 - введена структура `data/output/<job-name>/`;
 - удалены tracked `__pycache__`;

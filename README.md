@@ -130,7 +130,19 @@ python main.py --check-env
 python main.py --video .\data\input\video.mp4 --job-name demo --step all
 ```
 
-7. Проверить короткий test-mode smoke-run:
+7. Продолжить запуск без пересчета готовых шагов:
+
+```powershell
+python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume
+```
+
+Если нужно пересчитать конкретный шаг и все последующие:
+
+```powershell
+python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume --force-step tts
+```
+
+8. Проверить короткий test-mode smoke-run:
 
 ```powershell
 python scripts\smoke_pipeline.py
@@ -160,6 +172,8 @@ python main.py --step prepare_finetune --video .\data\input\video.mp4 --job-name
 `--test` сохраняет результаты в `data/test/`, production-режим использует `data/output/`.
 
 Если `--video` не указан, пайплайн берет единственное видео из `data/input/`. Старый режим `--suffix` сохранен для совместимости с файлами вида `video_<suffix>.mp4`.
+
+`--resume` пропускает уже готовые шаги по валидным артефактам. Если какой-то шаг пересчитан или указан через `--force-step`, все следующие шаги в `--step all` тоже выполняются, чтобы не оставить устаревшие downstream-файлы.
 
 ## Перевод
 

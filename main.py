@@ -33,6 +33,7 @@ except ImportError:
 import config as cfg
 from utils.helpers import seed_everything, manage_directory
 from utils.pipeline_io import build_pipeline_paths, derive_job_name, resolve_input_video
+from utils.pipeline_resume import step_resume_status
 
 logging.basicConfig(
     level=logging.INFO,
@@ -656,6 +657,51 @@ STEPS = {
 ALL_STEPS = ["preprocess", "asr", "translate", "tts", "postprocess", "subtitles", "metrics"]
 
 
+def normalize_force_steps(force_steps: list[str] | None) -> set[str]:
+    selected = set(force_steps or [])
+    if "all" in selected:
+        return set(STEPS.keys())
+    return selected
+
+
+def run_steps(
+    *,
+    step_names: list[str],
+    paths: dict,
+    job_name: str,
+    resume: bool,
+    force_steps: set[str],
+    subtitle_mode: str,
+) -> None:
+    upstream_ran = False
+    for step_name in step_names:
+        forced = step_name in force_steps
+        if resume and not upstream_ran and not forced:
+            complete, missing = step_resume_status(
+                paths,
+                step_name,
+                subtitle_mode=subtitle_mode,
+            )
+            if complete:
+                logger.info("Resume: шаг '%s' пропущен, артефакты уже готовы.", step_name)
+                continue
+            logger.info(
+                "Resume: шаг '%s' будет выполнен, отсутствует/невалидно: %s",
+                step_name,
+                ", ".join(missing),
+            )
+        elif resume and forced:
+            logger.info("Resume: шаг '%s' пересчитывается принудительно.", step_name)
+        elif resume and upstream_ran:
+            logger.info(
+                "Resume: шаг '%s' будет выполнен, потому что предыдущий шаг пересчитан.",
+                step_name,
+            )
+
+        STEPS[step_name](paths, job_name)
+        upstream_ran = True
+
+
 # ─── Точка входа ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -714,6 +760,24 @@ if __name__ == "__main__":
         "--check-env",
         action="store_true",
         help="Проверить зависимости, CLI и модельные файлы без запуска пайплайна"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Пропускать уже готовые шаги по наличию валидных артефактов. "
+            "Если шаг пересчитан, последующие шаги в --step all тоже выполняются."
+        )
+    )
+    parser.add_argument(
+        "--force-step",
+        choices=list(STEPS.keys()) + ["all"],
+        action="append",
+        default=[],
+        help=(
+            "При --resume принудительно пересчитать указанный шаг. "
+            "Можно передать несколько раз или указать all."
+        )
     )
     parser.add_argument(
         "--mt-model",
@@ -784,16 +848,21 @@ if __name__ == "__main__":
     logger.info(f"Режим:    {mode}")
     logger.info(f"Задание:  {job_name}")
     logger.info(f"Шаг:      {args.step}")
+    logger.info(f"Resume:   {'on' if args.resume else 'off'}")
     logger.info(f"Видео:    {paths['original_video']}")
     logger.info(f"Выходная: {paths['output']}")
     logger.info(f"MT:       {cfg.MT_MODEL_NAME} | {cfg.MT_STRATEGY}")
     logger.info("TTS:      xtts")
     logger.info(f"{'='*50}")
 
-    if args.step == "all":
-        for step_name in ALL_STEPS:
-            STEPS[step_name](paths, job_name)
-    else:
-        STEPS[args.step](paths, job_name)
+    requested_steps = ALL_STEPS if args.step == "all" else [args.step]
+    run_steps(
+        step_names=requested_steps,
+        paths=paths,
+        job_name=job_name,
+        resume=args.resume,
+        force_steps=normalize_force_steps(args.force_step),
+        subtitle_mode=args.subtitle_mode,
+    )
 
     logger.info("Готово.")
