@@ -34,6 +34,7 @@ from src.tts_text import (
     _clean_text,
     _ends_with_terminal_punctuation,
     _prepare_tts_segments,
+    _same_speaker,
 )
 
 logger = logging.getLogger(__name__)
