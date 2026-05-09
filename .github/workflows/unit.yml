@@ -36,5 +36,10 @@ jobs:
             src/config_snapshot.py \
             src/reporting.py
 
+      - name: Check config output
+        run: |
+          python main.py --show-config > /tmp/vid_dub_config.json
+          python -m json.tool /tmp/vid_dub_config.json > /dev/null
+
       - name: Run unit tests
         run: python -m pytest tests/unit

@@ -125,13 +125,22 @@ original_tts_model/
 python main.py --check-env
 ```
 
-6. Запустить полный пайплайн:
+6. Показать эффективную конфигурацию без запуска пайплайна:
+
+```powershell
+python main.py --show-config
+python main.py --show-config --mt-model gemini-2.5-flash --mt-strategy per-segment --subtitle-mode both
+```
+
+Команда выводит JSON со runtime, paths, ASR, MT, metrics, subtitles и TTS-настройками. Значения API-ключей не печатаются, только имена env-переменных.
+
+7. Запустить полный пайплайн:
 
 ```powershell
 python main.py --video .\data\input\video.mp4 --job-name demo --step all
 ```
 
-7. Продолжить запуск без пересчета готовых шагов:
+8. Продолжить запуск без пересчета готовых шагов:
 
 ```powershell
 python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume
@@ -143,7 +152,7 @@ python main.py --video .\data\input\video.mp4 --job-name demo --step all --resum
 python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume --force-step tts
 ```
 
-8. Проверить короткий test-mode smoke-run:
+9. Проверить короткий test-mode smoke-run:
 
 ```powershell
 python scripts\smoke_pipeline.py

@@ -777,6 +777,11 @@ if __name__ == "__main__":
         help="Проверить зависимости, CLI и модельные файлы без запуска пайплайна"
     )
     parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Показать эффективную конфигурацию запуска в JSON без запуска пайплайна"
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -830,6 +835,15 @@ if __name__ == "__main__":
 
     if args.check_env:
         sys.exit(0 if check_environment() else 1)
+    if args.show_config:
+        from src.config_snapshot import build_pipeline_config_snapshot
+
+        print(json.dumps(
+            build_pipeline_config_snapshot(cfg),
+            ensure_ascii=False,
+            indent=2,
+        ))
+        sys.exit(0)
 
     seed_everything(cfg.SEED)
 

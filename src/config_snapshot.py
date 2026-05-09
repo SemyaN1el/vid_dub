@@ -117,3 +117,70 @@ def build_tts_config_snapshot(config: ConfigSource) -> dict[str, Any]:
             ),
         ),
     }
+
+
+def build_pipeline_config_snapshot(config: ConfigSource) -> dict[str, Any]:
+    return {
+        "runtime": _pick(
+            config,
+            (
+                ("seed", "SEED"),
+                ("device", "DEVICE"),
+                ("default_job_name", "DEFAULT_JOB_NAME"),
+                ("default_speaker_id", "DEFAULT_SPEAKER_ID"),
+            ),
+        ),
+        "paths": _pick(
+            config,
+            (
+                ("input_path", "INPUT_PATH"),
+                ("output_path", "OUTPUT_PATH"),
+                ("test_output_path", "TEST_OUTPUT_PATH"),
+                ("model_tts_dir", "MODEL_TTS_DIR"),
+                ("finetuned_tts_dir", "FINETUNED_TTS_DIR"),
+                ("input_video_extensions", "INPUT_VIDEO_EXTENSIONS"),
+            ),
+        ),
+        "asr": _pick(
+            config,
+            (
+                ("provider", "ASR_PROVIDER"),
+                ("whisper_model", "WHISPER_MODEL_NAME"),
+                ("api_model", "ASR_API_MODEL"),
+                ("api_key_env", "ASR_API_KEY_ENV"),
+                ("timeout_sec", "ASR_TIMEOUT_SEC"),
+            ),
+        ),
+        "translation": _pick(
+            config,
+            (
+                ("model_name", "MT_MODEL_NAME"),
+                ("strategy", "MT_STRATEGY"),
+                ("batch_size", "MT_BATCH_SIZE"),
+                ("max_length", "MT_MAX_LENGTH"),
+                ("max_segment_chars", "MT_MAX_SEGMENT_CHARS"),
+                ("gemini_api_key_env", "MT_GEMINI_API_KEY_ENV"),
+                ("gemini_temperature", "MT_GEMINI_TEMPERATURE"),
+                ("gemini_timeout_sec", "MT_GEMINI_TIMEOUT_SEC"),
+            ),
+        ),
+        "metrics": _pick(
+            config,
+            (
+                ("asr_provider", "METRICS_ASR_PROVIDER"),
+                ("whisper_model", "METRICS_WHISPER_MODEL_NAME"),
+                ("asr_api_model", "METRICS_ASR_API_MODEL"),
+                ("asr_api_key_env", "METRICS_ASR_API_KEY_ENV"),
+            ),
+        ),
+        "subtitles": _pick(
+            config,
+            (
+                ("mode", "SUBTITLE_MODE"),
+                ("use_original", "SUBTITLE_USE_ORIGINAL"),
+                ("ass_font", "SUBTITLE_ASS_FONT"),
+                ("ass_font_size", "SUBTITLE_ASS_FONT_SIZE"),
+            ),
+        ),
+        "tts": build_tts_config_snapshot(config),
+    }
