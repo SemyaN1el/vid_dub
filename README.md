@@ -74,7 +74,8 @@ flowchart TD
 │   ├── subtitles.py            # генерация и встраивание субтитров
 │   └── finetune.py             # подготовка датасета для XTTS fine-tuning
 ├── scripts/
-│   └── smoke_pipeline.py       # test-mode smoke-run + artifact validation
+│   ├── smoke_pipeline.py       # test-mode smoke-run + artifact validation
+│   └── benchmark_tts_profiles.py # сравнение TTS-профилей
 ├── utils/
 │   ├── helpers.py
 │   └── pipeline_io.py          # job_name и пути артефактов
@@ -275,6 +276,26 @@ Smoke-check пайплайна:
 
 ```powershell
 python scripts\smoke_pipeline.py --video .\data\input\smoke_20s.mp4 --job-name smoke_pipeline
+```
+
+Benchmark TTS-профилей на одном коротком видео:
+
+```powershell
+python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --job-prefix tts_benchmark
+```
+
+Скрипт готовит общий upstream job `<prefix>_prep`, затем для каждого профиля копирует одинаковые `segments.json`, `translated_segments.json`, speaker refs и аудио-артефакты, прогоняет `tts -> postprocess -> subtitles -> metrics` и пишет сводки:
+
+```text
+data/test/<prefix>_summary/tts_benchmark_summary.md
+data/test/<prefix>_summary/tts_benchmark_summary.csv
+data/test/<prefix>_summary/tts_benchmark_summary.json
+```
+
+Доступные профили:
+
+```powershell
+python scripts\benchmark_tts_profiles.py --list-profiles
 ```
 
 ## Что уже реализовано в TTS-контуре

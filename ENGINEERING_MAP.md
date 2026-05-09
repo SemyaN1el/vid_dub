@@ -81,6 +81,11 @@ data/output/<job-name>/
   - Валидация ключевых артефактов, JSON-контрактов, subtitle manifest и метрик.
   - Режим `--skip-run` для быстрой проверки уже готовой папки `data/test/<job-name>/`.
 
+- `scripts/benchmark_tts_profiles.py`
+  - Сравнение TTS-профилей на одном подготовленном short job.
+  - Профили: baseline, SmartSync on/off, segment matching on/off, babble guard on/off, XTTS conservative/expressive.
+  - Для каждого профиля прогоняются `tts`, `postprocess`, `subtitles`, `metrics`; итог пишется в `tts_benchmark_summary.md/.csv/.json`.
+
 ### Конфигурация
 
 - `config.example.py`
@@ -345,6 +350,7 @@ speakers_xtts.pth
 - добавлен `config.example.py`;
 - добавлен `python main.py --check-env`;
 - добавлен `python scripts/smoke_pipeline.py`;
+- добавлен `python scripts/benchmark_tts_profiles.py`;
 - добавлен `run_report.md` после шага `metrics`;
 - добавлен `--resume` и `--force-step` для пропуска уже готовых шагов;
 - подключен шаг `subtitles`;
