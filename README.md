@@ -1,346 +1,247 @@
 # Automatic Video Dubbing with Voice Identity Preservation
 
-Исследовательский проект по автоматическому дубляжу видео с сохранением голосовой идентичности исходного спикера.
+Публичная витрина выпускной квалификационной работы по автоматическому дубляжу видео с английского языка на русский с сохранением голосовой идентичности диктора и временной синхронизацией реплик.
 
-Система обрабатывает одно входное видео, выделяет речь, распознает текст, переводит его на русский язык, синтезирует новую аудиодорожку голосом исходного диктора, собирает финальное видео, генерирует субтитры и считает метрики качества. Кодовая база ориентирована на исследовательскую и дипломную работу, но runtime-артефакты, материалы диплома и тяжелые модели остаются локальными и не попадают в git.
+Репозиторий намеренно не содержит исходный код, веса моделей, API-ключи, локальные конфигурации, датасеты и рабочие артефакты. Здесь опубликованы идея проекта, архитектура, методика, ключевые результаты и демонстрационный пример: исходное видео и полученный русскоязычный дубляж.
 
-## Что делает проект
+## Демонстрация
 
-- извлекает аудио из видео;
-- разделяет речь и фон через `Demucs`;
-- распознает речь через `Whisper` или Groq-compatible ASR;
-- сохраняет сегменты с таймингами, словами и паузами;
-- переводит сегменты через `NLLB` или `Gemini`;
-- синтезирует русскую речь через `XTTS-v2`;
-- строит `speaker profile` из исходного видео;
-- подгоняет тайминг дубляжа под исходные интервалы;
-- микширует дубляж с фоновой дорожкой;
-- генерирует soft/hard subtitles;
-- считает метрики качества: `LaBSE`, `WER`, `CER`, `Speaker Verification`.
+| Файл | Описание |
+|---|---|
+| [`media/original_en_machine_learning_100s.mp4`](media/original_en_machine_learning_100s.mp4) | исходный англоязычный ролик |
+| [`media/dubbed_ru_machine_learning_100s.mp4`](media/dubbed_ru_machine_learning_100s.mp4) | автоматически сгенерированный русскоязычный дубляж |
 
-## Пайплайн
+Параметры демонстрационного примера: `1280x720`, длительность `154 с`, каждый файл меньше `8 МБ`.
+
+> Перед публичной публикацией необходимо убедиться, что исходный видеофрагмент можно распространять. Если это нельзя делать по лицензии, исходное видео следует удалить из репозитория и заменить ссылкой на официальный источник.
+
+## Идея проекта
+
+Обычная схема автоматического дубляжа часто сводится к последовательности независимых шагов: распознать речь, перевести текст, синтезировать новую дорожку. На практике этого недостаточно. Даже если перевод смыслово корректен, он может не помещаться во временное окно исходной реплики. Даже если синтез звучит качественно, голос может быть не похож на исходного диктора. Даже если голос похож, итоговая дорожка может плохо распознаваться или конфликтовать с фоном.
+
+Поэтому проект рассматривает автоматический дубляж как многокритериальную задачу, где итоговое качество определяется не одним компонентом, а согласованием нескольких ограничений:
+
+- сохранение смысла исходной речи;
+- сохранение голосовой идентичности диктора;
+- попадание синтезированной реплики в исходные временные окна;
+- разборчивость и акустическая устойчивость итоговой речи;
+- воспроизводимость экспериментов через сохранение промежуточных артефактов.
+
+Цель работы - разработать систему, которая принимает исходный видеоролик, автоматически формирует русскоязычную речевую дорожку, сохраняет видеоряд и фон, синхронизирует результат с исходным таймингом и позволяет количественно оценить качество.
+
+## Общая архитектура
 
 ```mermaid
-flowchart TD
-    A["Input video"] --> B["Preprocess"]
-    B --> C["Extract audio"]
-    B --> D["Source separation"]
-    D --> E["Vocals"]
-    D --> F["Background"]
-    E --> G["ASR + segmentation"]
-    G --> H["segments.json"]
-    G --> I["speaker_ref.wav / speaker_profile.json"]
-    H --> J["Translation"]
-    J --> K["translated_segments.json"]
-    K --> L["TTS + timing alignment"]
-    I --> L
-    L --> M["final_dubbing.wav"]
-    M --> N["Postprocess"]
-    F --> N
-    C --> N
-    N --> O["final_mix.wav"]
-    O --> P["final_video.mp4"]
-    P --> S["Subtitles"]
-    K --> S
-    H --> Q["Metrics"]
-    K --> Q
-    I --> Q
-    M --> Q
+flowchart LR
+    A["Input video"] --> B["Audio preprocessing"]
+    B --> C["Source separation"]
+    C --> D["Vocals"]
+    C --> E["Background"]
+    D --> F["ASR + segmentation"]
+    F --> G["Machine translation"]
+    G --> H["TTS + SmartSync"]
+    D --> I["Speaker profile"]
+    I --> H
+    H --> J["Timing alignment"]
+    J --> K["Final mix"]
+    E --> K
+    K --> L["Dubbed video"]
+    L --> M["Metrics + report"]
 ```
 
-## Структура репозитория
+Система построена как каскадный пайплайн. Каждый этап сохраняет промежуточные файлы, поэтому отдельные компоненты можно сравнивать без полного пересчёта всего процесса.
+
+Основные этапы:
+
+1. **Предобработка видео и аудио.** Из исходного видео извлекается аудиодорожка, затем речь отделяется от фоновых звуков.
+2. **ASR и сегментация.** Речь распознаётся с временными метками слов; на их основе строятся сегменты для перевода и синтеза.
+3. **Построение голосового профиля.** Из исходной речи выбираются референсные фрагменты, по которым TTS-система воспроизводит голос диктора.
+4. **Машинный перевод.** Английские сегменты переводятся на русский язык с учётом контекста.
+5. **TTS и SmartSync.** Русский текст синтезируется голосом исходного диктора; проблемные реплики адаптируются под доступное временное окно.
+6. **Постобработка.** Синтезированная речь нормализуется, размещается на временной шкале и смешивается с фоновой дорожкой.
+7. **Оценка качества.** Система считает метрики смысловой близости, разборчивости и голосового сходства.
+
+## Актуальная конфигурация
+
+В финальной экспериментальной серии использовалась online-конфигурация:
+
+- `Whisper small` для ASR и word-level timestamp;
+- `RouterAI` как OpenAI-compatible backend;
+- модель `gpt-5.4-mini` для машинного перевода и SmartSync;
+- стратегия перевода `sentence-boundary-aware`;
+- `ElevenLabs Instant Voice Cloning` для синтеза речи с сохранением голосовой идентичности;
+- `FFmpeg` и `HTDemucs` для извлечения, разделения, микширования и сборки аудио/видео.
+
+Локальный fallback также рассматривался: локальный ASR/MT и `XTTS-v2`. Такой режим сохраняет автономность, но качество и скорость сильнее зависят от видеопамяти, локальной модели и качества референсов.
+
+## Sentence-boundary-aware translation
+
+Одна из проблем дубляжа состоит в том, что ASR-сегменты не всегда совпадают с предложениями. Если переводить каждый сегмент отдельно, модель теряет контекст. Если переводить целое предложение, затем приходится обратно делить перевод на исходные временные окна, и это может разрушить синхронизацию.
+
+В проекте используется промежуточная стратегия `sentence-boundary-aware`:
+
+1. соседние ASR-сегменты группируются до границы предложения;
+2. модель получает контекст полного предложения;
+3. модель сразу возвращает перевод в исходные сегментные окна;
+4. число выходных переводов должно совпадать с числом входных сегментов.
+
+Такой подход сохраняет контекст предложения, но не ломает сегментную структуру, необходимую для TTS и временной синхронизации.
+
+Пример:
 
 ```text
-.
-├── main.py                     # точка входа пайплайна
-├── config.example.py           # шаблон локальной конфигурации
-├── config.py                   # локальная конфигурация, в git не хранится
-├── requirements.txt            # Python-зависимости проекта
-├── src/
-│   ├── preprocessing.py        # ffmpeg + Demucs + аудиоподготовка
-│   ├── asr.py                  # ASR, сегментация, speaker profile
-│   ├── asr_backend.py          # local/Groq ASR backend
-│   ├── translation.py          # NLLB / Gemini и стратегии перевода
-│   ├── tts.py                  # XTTS orchestration
-│   ├── tts_audio.py            # level matching, compression, peak ceiling
-│   ├── tts_guards.py           # tail/babble guards
-│   ├── tts_routing.py          # reference routing
-│   ├── tts_text.py             # cleanup/grouping
-│   ├── tts_timing.py           # timing windows
-│   ├── tts_backends.py         # XTTS backend
-│   ├── postprocessing.py       # микширование и сборка видео
-│   ├── metrics.py              # LaBSE / WER / CER / speaker verification
-│   ├── reporting.py            # run_report.md по итогам запуска
-│   ├── subtitles.py            # генерация и встраивание субтитров
-│   └── finetune.py             # подготовка датасета для XTTS fine-tuning
-├── scripts/
-│   ├── smoke_pipeline.py       # test-mode smoke-run + artifact validation
-│   └── benchmark_tts_profiles.py # сравнение TTS-профилей
-├── utils/
-│   ├── helpers.py
-│   └── pipeline_io.py          # job_name и пути артефактов
-├── experiments/                # исследовательские benchmark-скрипты
-├── tests/unit/                 # быстрые unit-тесты
-└── ENGINEERING_MAP.md          # инженерная карта проекта
+Input segments:
+1. I did not say that
+2. he stole the money
+3. yesterday.
+
+Sentence context:
+I did not say that he stole the money yesterday.
+
+Expected segmented translation:
+1. Я не говорил, что
+2. он украл деньги
+3. вчера.
 ```
 
-## Быстрый старт
+Критически важно, что перевод возвращается не одним общим предложением, а массивом строк, соответствующих исходным сегментам. Если модель добавляет, удаляет или объединяет сегменты, результат отклоняется до передачи в TTS.
 
-1. Установить системные зависимости:
+## SmartSync
 
-```powershell
-winget install Gyan.FFmpeg
-```
+`SmartSync` - это механизм локальной адаптации уже переведённого текста под временное окно речевого сегмента или TTS-блока.
 
-`demucs` устанавливается как Python-пакет из `requirements.txt`, но его CLI должен быть доступен в активном окружении.
+SmartSync не выполняет полный повторный перевод видео. Он включается только тогда, когда синтезированная реплика оказывается слишком длинной или слишком короткой относительно доступного окна. Модель получает:
 
-2. Подготовить Python-окружение:
+- исходный текст;
+- текущий русский перевод;
+- соседний контекст;
+- доступную длительность;
+- фактическую длительность синтезированного аудио;
+- режим задачи: сделать фразу короче или немного полнее.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -r requirements.txt
-```
+После генерации кандидата система не принимает его автоматически. Работает acceptance gate:
 
-3. Создать локальный конфиг:
+- проверяется сохранение смысла;
+- проверяется техническая валидность ответа;
+- повторно оценивается длительность после TTS;
+- при необходимости используется ограниченное ускорение `atempo`;
+- если кандидат ухудшает результат, система возвращается к базовому переводу.
 
-```powershell
-Copy-Item config.example.py config.py
-```
+Идея SmartSync состоит в том, чтобы не ускорять механически все реплики и не доверять LLM-переформулировке без проверки. Это селективный слой адаптации под тайминг, встроенный в общий TTS-контур.
 
-4. Положить XTTS модель в `original_tts_model/`. Минимально ожидаются:
+## Контракт артефактов
 
-```text
-original_tts_model/
-  config.json
-  model.pth
-  vocab.json
-  speakers_xtts.pth
-```
+Для воспроизводимости каждый этап сохраняет промежуточные артефакты. Это позволяет сравнивать стратегии перевода, TTS-backend-ы и параметры синхронизации на одинаковых входных данных.
 
-5. Проверить окружение без запуска тяжелых моделей:
+Ключевые артефакты:
 
-```powershell
-python main.py --check-env
-```
+| Артефакт | Назначение |
+|---|---|
+| `vocals.wav` | очищенная речевая дорожка |
+| `other.wav` | фон, музыка и шумы исходного видео |
+| `segments.json` | ASR-сегменты, слова и временные метки |
+| `speaker_profile.json` | референсы и профиль голоса диктора |
+| `translated_segments.json` | перевод и последующие TTS-обновления |
+| `final_dubbing.wav` | синтезированная русская речь |
+| `final_mix.wav` | финальный микс речи и фона |
+| `final_video.mp4` | итоговый видеоролик |
+| `metrics.json` | метрики качества |
+| `run_report.md` | краткий отчёт по запуску |
 
-6. Показать эффективную конфигурацию без запуска пайплайна:
+Именно этот контракт делает возможным корректное сравнение: можно заменить переводчик, TTS-backend или judge-ASR, не меняя остальные входные данные.
 
-```powershell
-python main.py --show-config
-python main.py --show-config --mt-model gemini-2.5-flash --mt-strategy per-segment --subtitle-mode both
-```
+## Метрики качества
 
-Команда выводит JSON со runtime, paths, ASR, MT, metrics, subtitles и TTS-настройками. Значения API-ключей не печатаются, только имена env-переменных.
+В работе используются несколько метрик, потому что одна метрика не описывает качество дубляжа полностью.
 
-7. Проверить локальную готовность проекта:
+| Метрика | Что оценивает | Направление |
+|---|---|---|
+| `LaBSE` | смысловая близость исходного и переведённого текста | выше лучше |
+| `WER` | ошибка распознавания по словам после обратного ASR | ниже лучше |
+| `CER` | ошибка распознавания по символам после обратного ASR | ниже лучше |
+| `Speaker Verification` | сходство синтезированного голоса с исходным диктором | выше лучше |
+| время обработки | практическая стоимость запуска | ниже лучше |
 
-```powershell
-python main.py --doctor --video .\data\input\video.mp4
-```
+`LaBSE` важна для контроля смысла, но она не слышит аудио. Фраза может быть смыслово близкой, но плохо произноситься TTS-моделью или не попадать в тайминг. Поэтому в работе дополнительно используются WER, CER, Speaker Verification и технические счётчики TTS.
 
-`--doctor` проверяет `config.py`, входное видео, writable output/test директории, файлы XTTS-модели, `ffmpeg`/`demucs`, Python-зависимости и нужные API-key env-переменные. Если есть обязательные `FAIL`, команда завершается с ненулевым кодом.
+## Экспериментальная проверка
 
-8. Запустить полный пайплайн:
+Финальная проверка проводилась на четырёх полных видеороликах. Ролик `Man talk` был исключён из итоговой online-серии из-за ограничений/верификации голоса у провайдера клонирования, чтобы средние значения считались только по полностью успешно обработанным роликам.
 
-```powershell
-python main.py --video .\data\input\video.mp4 --job-name demo --step all
-```
+Средние показатели итоговой конфигурации `RouterAI + ElevenLabs IVC + SmartSync`:
 
-9. Продолжить запуск без пересчета готовых шагов:
+| Метрика | Значение | Интерпретация |
+|---|---:|---|
+| Speaker Verification | `0.9142` | выше лучше |
+| WER | `0.1333` | ниже лучше |
+| CER | `0.0288` | ниже лучше |
+| LaBSE mean | `0.8564` | выше лучше |
 
-```powershell
-python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume
-```
+Относительно локальной XTTS-конфигурации без SmartSync:
 
-Если нужно пересчитать конкретный шаг и все последующие:
+- WER снизился на `0.1290`;
+- CER снизился на `0.0975`;
+- Speaker Verification вырос на `0.0467`.
 
-```powershell
-python main.py --video .\data\input\video.mp4 --job-name demo --step all --resume --force-step tts
-```
+Практический вывод: ElevenLabs IVC дал основной прирост по голосовому сходству и разборчивости, а SmartSync используется как селективная адаптация текста под временное окно. При этом вклад SmartSync в online-связке требует отдельной абляционной проверки ElevenLabs без SmartSync.
 
-10. Проверить короткий test-mode smoke-run:
+## Научная новизна и вклад
 
-```powershell
-python scripts\smoke_pipeline.py
-```
+Работа рассматривает автоматический дубляж как единый многокритериальный ASR-MT-TTS-контур, где качество определяется совместной работой распознавания, перевода, синтеза, синхронизации и измерительных моделей.
 
-По умолчанию скрипт ожидает `data/input/smoke_20s.mp4`, запускает `main.py --step all --test --job-name smoke_pipeline`, затем проверяет ключевые артефакты: `final_dubbing.wav`, `final_mix.wav`, `final_video.mp4`, `tts_config.json`, `metrics.json`, `run_report.md`, `translated_segments.json` и `subtitles_manifest.json`.
+К новым результатам относятся:
 
-Чтобы только проверить уже готовые артефакты без повторного запуска:
+- стратегия `sentence-boundary-aware`, сохраняющая контекст предложения без разрушения исходных сегментных окон;
+- механизм `SmartSync` для локальной адаптации текста под временное окно;
+- acceptance gate для проверки LLM-переформулировок перед принятием;
+- единый контракт промежуточных артефактов для воспроизводимых сравнений;
+- экспериментальное сравнение локальной XTTS-конфигурации и online-конфигурации `RouterAI + ElevenLabs IVC + SmartSync`.
 
-```powershell
-python scripts\smoke_pipeline.py --job-name smoke_pipeline --skip-run
-```
+Личный вклад автора включает проектирование архитектуры, реализацию модулей обработки и синхронизации, подготовку экспериментального контура, проведение сравнительных запусков, расчёт метрик и анализ результатов.
 
-## Основные команды
+## Ограничения
 
-```powershell
-python main.py --step preprocess --video .\data\input\video.mp4 --job-name demo
-python main.py --step asr --video .\data\input\video.mp4 --job-name demo
-python main.py --step translate --video .\data\input\video.mp4 --job-name demo
-python main.py --step tts --video .\data\input\video.mp4 --job-name demo
-python main.py --step postprocess --video .\data\input\video.mp4 --job-name demo
-python main.py --step subtitles --video .\data\input\video.mp4 --job-name demo --subtitle-mode soft
-python main.py --step metrics --video .\data\input\video.mp4 --job-name demo
-python main.py --step prepare_finetune --video .\data\input\video.mp4 --job-name demo
-```
+Текущая версия проекта имеет несколько ограничений:
 
-`--test` сохраняет результаты в `data/test/`, production-режим использует `data/output/`.
+- основной сценарий ориентирован на одного доминирующего диктора;
+- полноценная диаризация и отдельные голоса для нескольких спикеров требуют дальнейшей разработки;
+- метрики WER/CER зависят от выбранной judge-ASR-модели;
+- внешние API-backend-ы дают лучшее качество, но требуют доступа к сети и зависят от ограничений провайдера;
+- вклад SmartSync в финальной online-связке требует отдельной абляции.
 
-Если `--video` не указан, пайплайн берет единственное видео из `data/input/`. Старый режим `--suffix` сохранен для совместимости с файлами вида `video_<suffix>.mp4`.
+## Перспективы развития
 
-`--resume` пропускает уже готовые шаги по валидным артефактам. Если какой-то шаг пересчитан или указан через `--force-step`, все следующие шаги в `--step all` тоже выполняются, чтобы не оставить устаревшие downstream-файлы.
+Дальнейшее развитие может включать:
 
-## Перевод
+- диаризацию и построение отдельных голосовых профилей для нескольких спикеров;
+- lip-sync и согласование артикуляции;
+- интерфейс ручной проверки и правки спорных сегментов;
+- расширение языков и тестового набора;
+- сравнение нескольких judge-ASR-моделей;
+- более строгую оценку акустических артефактов синтеза.
 
-По умолчанию используется `facebook/nllb-200-distilled-1.3B` и стратегия `per-segment`.
+## Состав репозитория
 
-```powershell
-python main.py --step translate --video .\data\input\video.mp4 --job-name demo --mt-model facebook/nllb-200-distilled-1.3B --mt-strategy per-segment
-```
+В публичном репозитории оставлены только:
 
-Для Gemini нужен API key:
+- `README.md`;
+- демонстрационные видео в `media/`;
+- опциональные публичные изображения или схемы в `docs/`.
 
-```powershell
-$env:GEMINI_API_KEY="your_key_here"
-python main.py --step translate --video .\data\input\video.mp4 --job-name demo --mt-model gemini-2.5-flash --mt-strategy per-segment
-```
+Не публикуются:
 
-Доступные стратегии:
+- исходный код;
+- веса моделей;
+- API-ключи и локальная конфигурация;
+- датасеты;
+- рабочие директории запусков;
+- дипломные черновики и служебные документы.
 
-- `per-segment`
-- `sentence-level`
-- `sliding-window`
-- `context-aware`
+## Апробация
 
-## Структура результата
+Ранний этап исследования был апробирован в публикации по материалам межрегиональной научно-практической конференции «Современные проблемы математики и информатики». В статье рассматривался базовый вариант каскадного пайплайна автоматического дубляжа. ВКР развивает этот результат за счёт sentence-boundary-aware перевода, RouterAI, ElevenLabs IVC, SmartSync acceptance gate и расширенной экспериментальной проверки на полных видеороликах.
 
-Для каждого задания создается отдельная директория:
+## Suggested Citation
 
-```text
-data/output/<job-name>/
-  segments.json
-  translated_segments.json
-  final_dubbing.wav
-  final_mix.wav
-  final_video.mp4
-  tts_config.json
-  metrics.json
-  run_report.md
-  subtitles/
-    subtitles.ass
-    subtitles.srt
-    subtitles_manifest.json
-  temp/
-    original_extracted_audio.wav
-    vocals.wav
-    vocals_processed.wav
-    background.wav
-    speaker_ref.wav
-    speaker_profile.json
-    speaker_refs/
-    audio_segments/
-```
+Smirnov O. I., Semyachkin D. A. Development of an automatic video dubbing system with speaker voice identity preservation // Modern Problems of Mathematics and Informatics: proceedings of an interregional scientific-practical conference. Tula: Tula State University Press, 2026. P. 253-257.
 
-Фактические пути строятся через `utils/pipeline_io.py`.
-
-## Backend-переменные
-
-- `ASR_PROVIDER=local|groq`
-- `METRICS_ASR_PROVIDER=local|groq`
-- `GROQ_API_KEY=...` для Groq ASR или SmartSync через Groq
-- `MT_MODEL_NAME=facebook/nllb-200-distilled-1.3B` или `gemini-*`
-- `GEMINI_API_KEY=...` для Gemini-перевода
-- `SMART_SYNC_ENABLED=0|1`
-- `SMART_SYNC_PROVIDER=groq|gemini`
-- `WHISPER_MODEL_NAME=small`
-
-## Оценка качества
-
-Шаг `metrics` сохраняет сводку в `metrics.json`, генерирует человекочитаемый `run_report.md` и считает:
-
-- `LaBSE` - семантическую близость исходного и переведенного текста;
-- `WER` - разборчивость синтезированной речи на уровне слов;
-- `CER` - разборчивость на уровне символов;
-- `Speaker Verification Score` - близость голосовых эмбеддингов.
-
-```powershell
-python main.py --step metrics --video .\data\input\video.mp4 --job-name demo
-```
-
-Шаг `tts` сохраняет фактический snapshot настроек в `tts_config.json`: XTTS generation, SmartSync, grouping, routing, guards и audio level. Шаг `metrics` копирует этот snapshot в `metrics.json` (`tts_config`), а `run_report.md` показывает краткий verdict, основные метрики, TTS config snapshot, количество сегментов, события TTS grouping/guards, timing pressure и ссылки на ключевые артефакты запуска.
-
-## Эксперименты и тесты
-
-Benchmark-скрипты лежат в `experiments/`:
-
-```powershell
-python experiments\compare_translation_strategies.py --suffix smoke_20s
-python experiments\compare_translation_models.py --suffix smoke_20s --models nllb-1.3B
-python experiments\test_google_translate.py --suffix smoke_20s
-python experiments\compare_translator_outputs.py --suffix smoke_20s
-python experiments\plot_translation_metrics.py --suffix smoke_20s
-```
-
-Быстрые unit-тесты лежат в `tests/unit/`:
-
-```powershell
-python -m pytest tests/unit
-```
-
-Для GitHub Actions используется минимальный набор зависимостей из `requirements-ci.txt`; тяжелый runtime-стек из `requirements.txt` не нужен для unit-контура.
-
-Smoke-check пайплайна:
-
-```powershell
-python scripts\smoke_pipeline.py --video .\data\input\smoke_20s.mp4 --job-name smoke_pipeline
-```
-
-Benchmark TTS-профилей на одном коротком видео:
-
-```powershell
-python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --job-prefix tts_benchmark
-```
-
-Скрипт готовит общий upstream job `<prefix>_prep`, затем для каждого профиля копирует одинаковые `segments.json`, `translated_segments.json`, speaker refs и аудио-артефакты, прогоняет `tts -> postprocess -> subtitles -> metrics` и пишет сводки с метриками и фактическим TTS config snapshot:
-
-```text
-data/test/<prefix>_summary/tts_benchmark_summary.md
-data/test/<prefix>_summary/tts_benchmark_summary.csv
-data/test/<prefix>_summary/tts_benchmark_summary.json
-data/test/<prefix>_summary/listen_pack/
-```
-
-Доступные профили:
-
-```powershell
-python scripts\benchmark_tts_profiles.py --list-profiles
-```
-
-Быстрая проверка инфраструктуры без полного сравнения:
-
-```powershell
-python scripts\benchmark_tts_profiles.py --video .\data\input\smoke_20s.mp4 --job-prefix smoke_tts_bench --profiles baseline
-```
-
-Полный прогон всех профилей нужен как отдельный quality pass перед изменением recommended TTS-настроек.
-
-## Что уже реализовано в TTS-контуре
-
-- multi-reference `speaker profile` из того же видео;
-- routing коротких сегментов по reference-клипам;
-- grouping соседних сегментов перед TTS;
-- ускорение через `ffmpeg atempo`;
-- loudness matching;
-- cheap tail guard для борьбы с мусорными хвостами;
-- optional babble guard и ASR retry;
-- кроссфейды и fade-in/fade-out;
-- сериализация TTS-таймингов обратно в `translated_segments.json`.
-
-## Примечания по репозиторию
-
-- `data/`, `models/`, `original_tts_model/`, `third_party/`, `articles/`, `thesis/`, `cleanup_archives/` являются локальными артефактами и не должны попадать в git.
-- Файлы диплома, статьи, черновики, презентации, `.docx`, `.pdf` и `.pptx` не переносятся в runtime-структуру проекта и остаются вне коммитов.
-- Для полного `--step all` нужны тяжелые ML-зависимости и, желательно, CUDA.

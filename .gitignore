@@ -1,60 +1,43 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.pytest_cache/
-*.log
+# Deny by default: this repository is a public showcase, not a source release.
+*
 
-# Editors / local tooling
-.vscode/
-.VSCodeCounter/
-.vendor/
+# Repository metadata and documentation
+!.gitignore
+!README.md
+!LICENSE
 
-# Jupyter / notebooks
-final.ipynb
-**/final.ipynb
-.ipynb_checkpoints/
+# Demo media
+!media/
+!media/*.mp4
+!media/README.md
 
-# Runtime data and generated artifacts
-data/
-models/
-original_tts_model/
+# Optional public visuals
+!docs/
+!docs/*.png
+!docs/*.jpg
+!docs/*.jpeg
+!docs/*.svg
+!docs/*.webp
+!docs/README.md
 
-# Local configuration / secrets
+# Never publish local or sensitive project files if copied here accidentally.
+*.env
 config.py
-.env
-.env.*
-
-# Research / thesis materials
-articles/
-thesis/
-*.docx
-*.pdf
-*.pptx
-
-# Local notes and extracted helper files
-cleanup_archives/
-draft_extracted.txt
-methodichka_extracted.txt
-vkr_methodichka_notes.md
-vkr_chapter3_conclusion.md
-tmp_*.json
-tmp_*.txt
-segments_*.json
-*translated*.json
-
-# Large local media / exports
+*.key
+*.pem
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
 *.wav
 *.mp3
 *.flac
 *.ogg
 *.m4a
-*.mp4
-*.mkv
-*.avi
-*.mov
-*.webm
+*.docx
+*.pptx
+*.pdf
+*.ipynb
 
-# Model / third-party experiment folders
-third_party/CosyVoice/
