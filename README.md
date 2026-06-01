@@ -237,11 +237,3 @@ SmartSync не выполняет полный повторный перевод
 - рабочие директории запусков;
 - дипломные черновики и служебные документы.
 
-## Апробация
-
-Ранний этап исследования был апробирован в публикации по материалам межрегиональной научно-практической конференции «Современные проблемы математики и информатики». В статье рассматривался базовый вариант каскадного пайплайна автоматического дубляжа. ВКР развивает этот результат за счёт sentence-boundary-aware перевода, RouterAI, ElevenLabs IVC, SmartSync acceptance gate и расширенной экспериментальной проверки на полных видеороликах.
-
-## Suggested Citation
-
-Smirnov O. I., Semyachkin D. A. Development of an automatic video dubbing system with speaker voice identity preservation // Modern Problems of Mathematics and Informatics: proceedings of an interregional scientific-practical conference. Tula: Tula State University Press, 2026. P. 253-257.
-
