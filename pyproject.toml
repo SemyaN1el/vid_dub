@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-dubbing"
+version = "0.1.0"
+description = "Automatic video dubbing pipeline with voice identity preservation."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+authors = [
+  { name = "D. A. Semyachkin" }
+]
+dependencies = [
+  "numpy>=1.24,<3",
+  "scipy>=1.10,<2",
+  "soundfile>=0.12,<1",
+  "pydub>=0.25,<1",
+  "noisereduce>=3.0,<4",
+  "tqdm>=4.66,<5",
+  "requests>=2.31,<3",
+  "PyYAML>=6.0,<7",
+  "openai>=1.30,<2"
+]
+
+[project.optional-dependencies]
+asr = [
+  "torch>=2.1",
+  "openai-whisper>=20231117"
+]
+mt-local = [
+  "torch>=2.1",
+  "transformers>=4.40,<5",
+  "sentencepiece>=0.1.99",
+  "accelerate>=0.29"
+]
+tts-local = [
+  "TTS>=0.22"
+]
+separation = [
+  "demucs>=4.0,<5"
+]
+metrics = [
+  "matplotlib>=3.8,<4",
+  "sentence-transformers>=2.6",
+  "scikit-learn>=1.4,<2",
+  "jiwer>=3,<4",
+  "resemblyzer>=0.1.4"
+]
+desktop = [
+  "PySide6>=6.6,<7"
+]
+api = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "python-multipart>=0.0.9,<1"
+]
+dev = [
+  "pytest>=8,<9",
+  "httpx>=0.27,<1"
+]
+full = [
+  "torch>=2.1",
+  "openai-whisper>=20231117",
+  "transformers>=4.40,<5",
+  "sentencepiece>=0.1.99",
+  "accelerate>=0.29",
+  "TTS>=0.22",
+  "demucs>=4.0,<5",
+  "matplotlib>=3.8,<4",
+  "sentence-transformers>=2.6",
+  "scikit-learn>=1.4,<2",
+  "jiwer>=3,<4",
+  "resemblyzer>=0.1.4",
+  "PySide6>=6.6,<7",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "python-multipart>=0.0.9,<1",
+  "httpx>=0.27,<1",
+  "pytest>=8,<9"
+]
+
+[project.scripts]
+video-dubbing-desktop = "desktop.app:main"
+video-dubbing-product-smoke = "scripts.product_smoke:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "utils*", "desktop*", "scripts*", "api*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+python_files = ["test_*.py"]

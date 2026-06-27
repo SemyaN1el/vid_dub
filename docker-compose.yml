@@ -1,0 +1,62 @@
+services:
+  dub:
+    build:
+      context: .
+      dockerfile: Dockerfile.online
+    image: video-dubbing:online
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MT_PROVIDER: openai_compatible
+      MT_MODEL_NAME: openai/gpt-5.4-mini
+      MT_STRATEGY: sentence-boundary-aware
+      MT_STYLE: compact
+      TTS_PROVIDER: elevenlabs
+      SMART_SYNC_ENABLED: "1"
+      SMART_SYNC_PROVIDER: openai_compatible
+      SMART_SYNC_MODEL_NAME: openai/gpt-5.4-mini
+      SUBTITLE_MODE: hard
+      ORIGINAL_GAIN: "-22.0"
+      VIDEO_DUBBING_API_MAX_WORKERS: "1"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./original_tts_model:/app/original_tts_model
+    stdin_open: true
+    tty: true
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.online
+    image: video-dubbing:online
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MT_PROVIDER: openai_compatible
+      MT_MODEL_NAME: openai/gpt-5.4-mini
+      MT_STRATEGY: sentence-boundary-aware
+      MT_STYLE: compact
+      TTS_PROVIDER: elevenlabs
+      SMART_SYNC_ENABLED: "1"
+      SMART_SYNC_PROVIDER: openai_compatible
+      SMART_SYNC_MODEL_NAME: openai/gpt-5.4-mini
+      SUBTITLE_MODE: hard
+      ORIGINAL_GAIN: "-22.0"
+      VIDEO_DUBBING_API_MAX_WORKERS: "1"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./original_tts_model:/app/original_tts_model
+    ports:
+      - "8000:8000"
+    command:
+      - -m
+      - uvicorn
+      - api.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"

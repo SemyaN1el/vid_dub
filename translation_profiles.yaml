@@ -1,0 +1,109 @@
+profiles:
+  interview:
+    description: Conversational interview, podcast guest, or talking-head speech.
+    system_directives: >
+      Treat the source as spoken interview dialogue. Keep the speaker's intent,
+      hesitation level, and interpersonal tone, but translate into clean natural
+      target-language speech. Remove only redundant filler that would sound
+      awkward in dubbing. Do not over-polish into written prose.
+    user_directives: >
+      Preserve question-answer flow, short reactions, self-corrections, and
+      casual emphasis when they carry meaning. Use compact phrasing for tight
+      segments, but keep the line speakable.
+    domain: >
+      Spoken interview dialogue for video dubbing. Translate naturally and
+      conversationally while preserving intent, names, numbers, and speaker tone.
+
+  lecture:
+    description: Educational lecture, tutorial, explainer, or course material.
+    system_directives: >
+      Treat the source as educational spoken content. Prioritize clarity,
+      stable terminology, and logical links between ideas. Keep examples,
+      definitions, numbers, and technical terms exact. The translation should
+      sound like a clear lecturer speaking aloud, not like a textbook.
+    user_directives: >
+      Preserve explanatory structure and cause-effect wording. Prefer concise
+      Russian equivalents for common technical phrases when timing is tight.
+    domain: >
+      Educational lecture and technical explainer speech for video dubbing.
+      Translate clearly with stable terminology and natural spoken delivery.
+
+  podcast:
+    description: Informal podcast, long-form conversation, or commentary.
+    system_directives: >
+      Treat the source as informal spoken commentary. Keep conversational energy,
+      jokes, intensifiers, and rhetorical questions when they affect meaning.
+      Avoid literal syntax and avoid stiff formal Russian.
+    user_directives: >
+      Prefer idiomatic spoken phrasing. Keep interruptions and fragments natural
+      instead of forcing every line into a full written sentence.
+    domain: >
+      Informal podcast and commentary speech for video dubbing. Translate
+      idiomatically and conversationally while preserving meaning.
+
+  news:
+    description: News, documentary narration, analytical report, or public speech.
+    system_directives: >
+      Treat the source as broadcast or documentary speech. Use concise neutral
+      wording, preserve facts, dates, names, numbers, claims, and attribution.
+      Avoid slang unless it is quoted or central to meaning.
+    user_directives: >
+      Keep factual density high. Do not soften, exaggerate, or editorialize
+      claims. Make the line easy to read aloud in a broadcast voice.
+    domain: >
+      News, documentary, and analytical speech for video dubbing. Translate in
+      concise neutral broadcast language while preserving facts and attribution.
+
+  movie:
+    description: Scripted dialogue, film scene, drama, comedy, or roleplay.
+    system_directives: >
+      Treat the source as scripted character dialogue. Preserve subtext, emotion,
+      relationship dynamics, jokes, threats, and register shifts. Translate into
+      natural target-language lines an actor could say aloud. Avoid explanatory
+      paraphrases unless needed for idiom.
+    user_directives: >
+      Keep each line performable and close to the original beat. Preserve short
+      punchlines, emotional turns, names, insults, and negations.
+    domain: >
+      Scripted film or character dialogue for dubbing. Translate performable
+      spoken lines while preserving emotion, subtext, jokes, and timing.
+
+  hotel:
+    description: Hotel, travel, booking, and front-desk service dialogue.
+    system_directives: >
+      Treat the source as hotel or travel service dialogue. Use standard
+      Russian hospitality terminology for booking, check-in, check-out,
+      and front-desk interactions.
+    domain: >
+      Hotel and travel service dialogue for video dubbing. Translate with
+      standard hospitality wording while preserving names, dates, room
+      numbers, and prices.
+    text_replacements:
+      - время высадки -> время выезда
+      - высадки -> выезда
+      - для целей регистрации -> для регистрации
+      - работник ресепшн -> сотрудник стойки регистрации
+      - на ресепшн -> на стойке регистрации
+
+  tech_review:
+    description: Product review, coding video, AI tooling, or technical demo.
+    system_directives: >
+      Treat the source as a technical review or demo. Preserve product names,
+      API names, model names, code-like tokens, metrics, prices, versions, and
+      commands. Translate explanations naturally for voice-over while keeping
+      terminology consistent.
+    user_directives: >
+      Keep code-like tokens unchanged. Prefer established Russian technical
+      terms when they exist, and avoid translating library or model names.
+    domain: >
+      Technical product review, coding tutorial, or AI tooling demo for video
+      dubbing. Translate naturally while preserving technical terms and exact
+      product/model names.
+    preserve_terms:
+      - API
+      - SDK
+      - Python
+      - PyTorch
+      - OpenAI
+      - Whisper
+      - XTTS

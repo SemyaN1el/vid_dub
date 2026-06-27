@@ -1,0 +1,32 @@
+# Docker online profile: local audio preprocessing/ASR + API MT/TTS.
+# The Dockerfile installs CPU PyTorch separately before this file.
+
+numpy>=1.24,<3
+scipy>=1.10,<2
+soundfile>=0.12,<1
+pydub>=0.25,<1
+noisereduce>=3.0,<4
+tqdm>=4.66,<5
+requests>=2.31,<3
+PyYAML>=6.0,<7
+openai>=1.30,<2
+
+# Local ASR and source separation used before RouterAI/ElevenLabs.
+openai-whisper>=20231117
+demucs>=4.0,<5
+
+# Translation helpers and metrics.
+transformers>=4.40,<5
+sentencepiece>=0.1.99
+accelerate>=0.29
+matplotlib>=3.8,<4
+sentence-transformers>=2.6
+scikit-learn>=1.4,<2
+jiwer>=3,<4
+resemblyzer>=0.1.4
+
+# Smoke tests.
+pytest>=8,<9
+
+# FastAPI wrapper.
+-r requirements-api.txt

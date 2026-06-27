@@ -1,43 +1,95 @@
-# Deny by default: this repository is a public showcase, not a source release.
-*
+# Python/runtime caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Repository metadata and documentation
-!.gitignore
-!README.md
-!LICENSE
+# Virtual environments and local tooling
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+.agents/
+.claude/
+.vendor/
 
-# Demo media
-!media/
-!media/*.mp4
-!media/README.md
-
-# Optional public visuals
-!docs/
-!docs/*.png
-!docs/*.jpg
-!docs/*.jpeg
-!docs/*.svg
-!docs/*.webp
-!docs/README.md
-
-# Never publish local or sensitive project files if copied here accidentally.
-*.env
+# Local secrets and machine-specific config
+.env
+.env.*
+!.env.example
 config.py
 *.key
 *.pem
+*.p12
+*.crt
+
+# Runtime inputs, generated artifacts, model weights
+data/
+input/
+outputs/
+logs/
+models/
+original_tts_model/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.mov
+*.mkv
+*.avi
+*.webm
 *.pth
 *.pt
 *.ckpt
 *.safetensors
 *.onnx
 *.bin
-*.wav
-*.mp3
-*.flac
-*.ogg
-*.m4a
+
+# Demo media intentionally kept in the repository
+!media/
+!media/*.mp4
+!media/README.md
+
+# Local thesis/defense/document artifacts
+archive/
+cleanup_archives/
+ablation_kit/
+defense_kit/
+thesis/
+articles/
+tools/
+experiments/
+docker-airflow/
+_docx_*/
+_ppt_*/
+_ai_cleaner_extract_*/
+src_backup_*/
+.__wtest
 *.docx
 *.pptx
 *.pdf
 *.ipynb
+CLAUDE*.md
+ENGINEERING_MAP.md
+DIPLOMA_*.md
+PZ_*.md
+ПЗ*.docx
 
+# Generated/internal documentation dumps; keep only lightweight public assets
+docs/*
+!docs/README.md
+!docs/*.png
+!docs/*.jpg
+!docs/*.jpeg
+!docs/*.svg
+!docs/*.webp
+
+# Misc OS files
+.DS_Store
+Thumbs.db

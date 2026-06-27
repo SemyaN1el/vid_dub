@@ -1,0 +1,13 @@
+# Lightweight dependency set for deterministic unit and packaging smoke tests.
+pytest>=8,<9
+numpy>=1.24,<3
+scipy>=1.10,<2
+soundfile>=0.12,<1
+pydub>=0.25,<1
+tqdm>=4.66,<5
+requests>=2.31,<3
+PyYAML>=6.0,<7
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9,<1
+httpx>=0.27,<1

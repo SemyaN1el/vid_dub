@@ -1,0 +1,48 @@
+# CLI image for the current online configuration:
+# local FFmpeg/Demucs/Whisper preprocessing + RouterAI/OpenAI-compatible MT +
+# ElevenLabs IVC TTS + SmartSync via OpenAI-compatible API.
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PYTHONIOENCODING=utf-8 \
+    PIP_NO_CACHE_DIR=1 \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    HF_HOME=/app/.cache/huggingface \
+    TORCH_HOME=/app/.cache/torch
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    git \
+    build-essential \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-online.txt requirements-api.txt pyproject.toml ./
+
+# CPU PyTorch keeps the online image smaller and avoids CUDA runtime coupling.
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.1" \
+    && python -m pip install -r requirements-online.txt
+
+COPY .dockerignore .env.example Dockerfile.online docker-compose.yml INSTALL.md ./
+COPY requirements.txt requirements-ci.txt requirements-api.txt ./
+COPY main.py config.example.py translation_profiles.yaml ./
+COPY api ./api
+COPY web ./web
+COPY src ./src
+COPY utils ./utils
+COPY scripts ./scripts
+COPY desktop ./desktop
+COPY tests/unit ./tests/unit
+
+RUN cp config.example.py config.py \
+    && mkdir -p data/input data/output data/test models original_tts_model .cache
+
+VOLUME ["/app/data", "/app/models", "/app/original_tts_model"]
+
+ENTRYPOINT ["python"]
+CMD ["main.py", "--show-config"]

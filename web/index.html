@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Video Dubbing</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="/ui/app.js" defer></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Automatic dubbing pipeline</p>
+        <h1>Video Dubbing</h1>
+      </div>
+      <div class="header-actions">
+        <a class="icon-link" href="/docs" title="OpenAPI docs">
+          <i data-lucide="book-open"></i>
+          <span>API docs</span>
+        </a>
+        <span class="health-pill" id="healthPill">
+          <span class="status-dot"></span>
+          <span id="healthText">checking</span>
+        </span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel job-panel" aria-labelledby="newJobTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Launch</p>
+            <h2 id="newJobTitle">Новая задача</h2>
+          </div>
+          <button class="icon-button" id="refreshButton" type="button" title="Refresh jobs">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+
+        <div class="mode-control" role="group" aria-label="Video source">
+          <button class="mode-button active" type="button" data-mode="path">
+            <i data-lucide="folder-open"></i>
+            <span>Путь</span>
+          </button>
+          <button class="mode-button" type="button" data-mode="upload">
+            <i data-lucide="upload"></i>
+            <span>Файл</span>
+          </button>
+        </div>
+
+        <form id="jobForm" class="job-form">
+          <label class="field path-field">
+            <span>Видео в контейнере</span>
+            <input id="videoPath" name="videoPath" value="/app/data/input/talk.mp4" autocomplete="off">
+          </label>
+
+          <label class="field upload-field hidden">
+            <span>Загрузить видео</span>
+            <input id="videoFile" name="videoFile" type="file" accept="video/*">
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Job name</span>
+              <input id="jobName" name="jobName" value="talk_ru" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Шаг</span>
+              <select id="step" name="step">
+                <option value="all">all</option>
+                <option value="preprocess">preprocess</option>
+                <option value="asr">asr</option>
+                <option value="translate">translate</option>
+                <option value="tts">tts</option>
+                <option value="postprocess">postprocess</option>
+                <option value="subtitles">subtitles</option>
+                <option value="metrics">metrics</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>MT provider</span>
+              <select id="mtProvider" name="mtProvider">
+                <option value="openai_compatible">openai_compatible</option>
+                <option value="hf">hf</option>
+                <option value="gemini">gemini</option>
+                <option value="openai">openai</option>
+                <option value="openrouter">openrouter</option>
+                <option value="groq">groq</option>
+                <option value="cerebras">cerebras</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>MT model</span>
+              <input id="mtModel" name="mtModel" value="openai/gpt-5.4-mini" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Strategy</span>
+              <select id="mtStrategy" name="mtStrategy">
+                <option value="sentence-boundary-aware">sentence-boundary-aware</option>
+                <option value="per-segment">per-segment</option>
+                <option value="boundary-aware">boundary-aware</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Style</span>
+              <select id="mtStyle" name="mtStyle">
+                <option value="compact">compact</option>
+                <option value="standard">standard</option>
+                <option value="academic">academic</option>
+                <option value="casual">casual</option>
+                <option value="news">news</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>TTS</span>
+              <select id="ttsProvider" name="ttsProvider">
+                <option value="elevenlabs">elevenlabs</option>
+                <option value="xtts">xtts</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Subtitles</span>
+              <select id="subtitleMode" name="subtitleMode">
+                <option value="hard">hard</option>
+                <option value="soft">soft</option>
+                <option value="both">both</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="switch-row">
+            <label class="switch">
+              <input id="resume" name="resume" type="checkbox" checked>
+              <span>Resume</span>
+            </label>
+            <label class="switch">
+              <input id="testMode" name="testMode" type="checkbox">
+              <span>Test output</span>
+            </label>
+            <label class="switch">
+              <input id="skipMetrics" name="skipMetrics" type="checkbox" checked>
+              <span>Без метрик</span>
+            </label>
+          </div>
+
+          <button class="primary-button" id="startButton" type="submit">
+            <i data-lucide="play"></i>
+            <span>Start dubbing</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="panel monitor-panel" aria-labelledby="monitorTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Monitor</p>
+            <h2 id="monitorTitle">Текущая задача</h2>
+          </div>
+          <select id="jobSelect" class="job-select" aria-label="Select job">
+            <option value="">No jobs</option>
+          </select>
+        </div>
+
+        <div class="job-summary">
+          <div>
+            <span class="summary-label">Status</span>
+            <strong id="jobStatus">idle</strong>
+          </div>
+          <div>
+            <span class="summary-label">Job</span>
+            <strong id="jobNameView">none</strong>
+          </div>
+          <div>
+            <span class="summary-label">Return</span>
+            <strong id="returnCode">-</strong>
+          </div>
+        </div>
+
+        <div class="steps" id="steps">
+          <div class="step" data-step="preprocess"><span></span>preprocess</div>
+          <div class="step" data-step="asr"><span></span>asr</div>
+          <div class="step" data-step="translate"><span></span>translate</div>
+          <div class="step" data-step="tts"><span></span>tts</div>
+          <div class="step" data-step="postprocess"><span></span>postprocess</div>
+          <div class="step" data-step="subtitles"><span></span>subtitles</div>
+          <div class="step" data-step="metrics"><span></span>metrics</div>
+        </div>
+
+        <div class="artifact-header">
+          <h3>Результаты</h3>
+          <button class="ghost-button" id="artifactsButton" type="button">
+            <i data-lucide="package-open"></i>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="artifact-list" id="artifactList">
+          <p class="empty-state">Готовые файлы появятся после завершения пайплайна.</p>
+        </div>
+      </section>
+
+      <section class="panel log-panel" aria-labelledby="logTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Runtime</p>
+            <h2 id="logTitle">Лог выполнения</h2>
+          </div>
+          <button class="icon-button" id="copyLogButton" type="button" title="Copy log">
+            <i data-lucide="copy"></i>
+          </button>
+        </div>
+        <pre id="logOutput">Выбери или запусти задачу, чтобы увидеть лог.</pre>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
